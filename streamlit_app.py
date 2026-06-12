@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -28,6 +29,65 @@ FILTER_LABELS = {
   "muc_module": "Module",
   "problem_mapping": "Problem",
 }
+
+
+def apply_page_style():
+  st.markdown(
+    """
+    <style>
+      .block-container {
+        padding-top: 1.8rem;
+        padding-bottom: 2.5rem;
+        max-width: 1480px;
+      }
+      [data-testid="stSidebar"] {
+        background: #f3f6f6;
+      }
+      .cfr-title {
+        color: #122426;
+        font-size: 2.1rem;
+        font-weight: 780;
+        margin-bottom: 0.15rem;
+      }
+      .cfr-subtitle {
+        color: #5f6f72;
+        font-size: 0.98rem;
+        margin-bottom: 1.1rem;
+      }
+      .metric-card {
+        background: #fffdf8;
+        border: 1px solid #e5e0d8;
+        border-radius: 8px;
+        padding: 1rem 1.1rem;
+        min-height: 132px;
+      }
+      .metric-label {
+        color: #4d6568;
+        font-size: 0.82rem;
+        margin-bottom: 0.45rem;
+      }
+      .metric-value {
+        color: #071316;
+        font-size: 1.75rem;
+        font-weight: 800;
+        line-height: 1.1;
+      }
+      .metric-note {
+        color: #607478;
+        font-size: 0.82rem;
+        margin-top: 0.65rem;
+      }
+      h2, h3 {
+        color: #0c1c1f;
+      }
+      div[data-testid="stDataFrame"] {
+        border: 1px solid #e5e0d8;
+        border-radius: 8px;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+  )
 
 
 def pct(value: float | None) -> str:
@@ -88,16 +148,41 @@ def selected_filters(records: list[dict]) -> dict[str, list[str]]:
 def metric_row(result: dict):
   kpis = result["kpis"]
   cols = st.columns(5)
-  cols[0].metric("Filtered CFR", pct(kpis["filtered_cfr"]))
-  cols[0].caption(f"{whole(kpis['filtered_failure_qty'])} failures / {whole(kpis['derived_act'])} derived ACT")
-  cols[1].metric("Failure Qty", whole(kpis["filtered_failure_qty"]))
-  cols[1].caption("Filtered raw-data failures")
-  cols[2].metric("Derived ACT", whole(kpis["derived_act"]))
-  cols[2].caption("From SUMMARY_IEC CFR rule")
-  cols[3].metric("ACT Model Coverage", whole(kpis["act_model_count"]))
-  cols[3].caption(f"Target CFR: {pct(kpis['target_cfr'])}")
-  cols[4].metric("Latest WoW", f"{kpis['week_delta']:+,}")
-  cols[4].caption(f"{kpis['previous_week']} to {kpis['latest_week']}")
+  cards = [
+    ("Filtered CFR", pct(kpis["filtered_cfr"]), f"{whole(kpis['filtered_failure_qty'])} failures / {whole(kpis['derived_act'])} derived ACT"),
+    ("Failure Qty", whole(kpis["filtered_failure_qty"]), "Filtered raw-data failures"),
+    ("Derived ACT", whole(kpis["derived_act"]), "From SUMMARY_IEC CFR rule"),
+    ("ACT Model Coverage", whole(kpis["act_model_count"]), f"Target CFR: {pct(kpis['target_cfr'])}"),
+    ("Latest WoW", f"{kpis['week_delta']:+,}", f"{kpis['previous_week']} to {kpis['latest_week']}"),
+  ]
+  for column, (label, value, note) in zip(cols, cards):
+    column.markdown(
+      f"""
+      <div class="metric-card">
+        <div class="metric-label">{label}</div>
+        <div class="metric-value">{value}</div>
+        <div class="metric-note">{note}</div>
+      </div>
+      """,
+      unsafe_allow_html=True,
+    )
+
+
+def bar_chart(frame: pd.DataFrame, x_column: str, y_column: str, height: int = 260):
+  chart = (
+    alt.Chart(frame)
+    .mark_bar(color="#138a8e", cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+    .encode(
+      x=alt.X(f"{x_column}:N", sort="-y", axis=alt.Axis(labelAngle=-45, title=None)),
+      y=alt.Y(f"{y_column}:Q", axis=alt.Axis(title=None)),
+      tooltip=[
+        alt.Tooltip(f"{x_column}:N", title="Item"),
+        alt.Tooltip(f"{y_column}:Q", title="Count"),
+      ],
+    )
+    .properties(height=height)
+  )
+  st.altair_chart(chart, use_container_width=True)
 
 
 def render_ratio(title: str, rows: list[dict]):
@@ -106,7 +191,7 @@ def render_ratio(title: str, rows: list[dict]):
     st.info("No records in the current filter.")
     return
   frame = pd.DataFrame(rows)
-  st.bar_chart(frame.set_index("label")["count"])
+  bar_chart(frame, "label", "count")
   st.dataframe(
     frame.assign(Share=frame["share"].map(lambda value: f"{value:.1f}%"))[
       ["label", "count", "Share"]
@@ -122,7 +207,20 @@ def render_trend(result: dict):
   if trend.empty:
     st.info("No trend data in the current filter.")
     return
-  st.line_chart(trend.set_index("week")["count"])
+  chart = (
+    alt.Chart(trend)
+    .mark_line(point=True, color="#138a8e", strokeWidth=2.5)
+    .encode(
+      x=alt.X("week:N", axis=alt.Axis(labelAngle=-45, title=None)),
+      y=alt.Y("count:Q", axis=alt.Axis(title=None)),
+      tooltip=[
+        alt.Tooltip("week:N", title="Week"),
+        alt.Tooltip("count:Q", title="Failure Qty"),
+      ],
+    )
+    .properties(height=300)
+  )
+  st.altair_chart(chart, use_container_width=True)
 
 
 def render_pareto(result: dict):
@@ -138,7 +236,8 @@ def render_pareto(result: dict):
 
 
 def render_heatmap(result: dict):
-  st.subheader("ORG_MODEL(PRODUCT_DESC) by PROBLEM_Mapping")
+  st.subheader("Watch Matrix Heatmap")
+  st.caption("Each cell shows failure count with CFR in parentheses when ACT is available.")
   columns = result["heatmap_columns"]
   rows = result["heatmap"]
   if not columns or not rows:
@@ -165,9 +264,32 @@ def render_heatmap(result: dict):
           f"{count_frame.loc[row_label, column_label]} ({pct(cfr_value)})"
         )
 
+  max_cfr = cfr_frame.max(numeric_only=True).max()
+  max_count = count_frame.max(numeric_only=True).max()
+
+  def cell_styles(_: pd.DataFrame) -> pd.DataFrame:
+    styles = pd.DataFrame("", index=display_frame.index, columns=display_frame.columns)
+    for row_label in display_frame.index:
+      for column_label in display_frame.columns:
+        count = count_frame.loc[row_label, column_label]
+        cfr_value = cfr_frame.loc[row_label, column_label]
+        if not count:
+          styles.loc[row_label, column_label] = "background-color: #f6fbfb; color: #5f6f72;"
+          continue
+        denominator = max_cfr if pd.notna(cfr_value) and max_cfr else max_count
+        value = cfr_value if pd.notna(cfr_value) and max_cfr else count
+        intensity = min(float(value or 0) / float(denominator or 1), 1)
+        lightness = int(94 - 42 * intensity)
+        styles.loc[row_label, column_label] = (
+          f"background-color: hsl(183, 36%, {lightness}%); "
+          "color: #071316; font-weight: 650; text-align: center;"
+        )
+    return styles
+
   st.dataframe(
-    display_frame,
+    display_frame.style.apply(cell_styles, axis=None),
     use_container_width=True,
+    height=360,
   )
 
 
@@ -175,13 +297,20 @@ def render_file_summary(parsed: dict):
   files = parsed.get("files", [])
   if not files:
     return
-  with st.expander("Loaded weekly raw data", expanded=True):
-    st.dataframe(pd.DataFrame(files), use_container_width=True, hide_index=True)
+  with st.expander("Loaded weekly raw data", expanded=False):
+    for file_info in files:
+      st.markdown(
+        f"- **{file_info['source_type']}** - `{file_info['filename']}` - {file_info['rows']} rows"
+      )
 
 
 def main():
-  st.title("CFR Watch Board")
-  st.caption("Upload weekly Gaming NB and PC NB CFR workbooks, then filter by model, segment, ODM/OEM, module, and problem.")
+  apply_page_style()
+  st.markdown('<div class="cfr-title">CFR Watch Board</div>', unsafe_allow_html=True)
+  st.markdown(
+    '<div class="cfr-subtitle">Upload weekly Gaming NB and PC NB CFR workbooks, then filter by model, segment, ODM/OEM, module, and problem.</div>',
+    unsafe_allow_html=True,
+  )
 
   uploaded_files = st.file_uploader(
     "Weekly CFR workbooks",
