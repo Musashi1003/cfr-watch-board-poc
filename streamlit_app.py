@@ -532,7 +532,8 @@ def render_heatmap(result: dict):
           "count": count,
           "cfr_pct": cfr_value * 100 if pd.notna(cfr_value) else None,
           "color_value": color_value,
-          "label": f"{count}\n{cfr_value * 100:.2f}%" if count and pd.notna(cfr_value) else str(count),
+          "count_label": str(count) if count else "-",
+          "cfr_label": f"CFR {cfr_value * 100:.2f}%" if count and pd.notna(cfr_value) else "",
         }
       )
 
@@ -556,17 +557,40 @@ def render_heatmap(result: dict):
       ],
     )
   )
-  text = (
+  count_text = (
     alt.Chart(frame)
-    .mark_text(color="#071316", fontSize=11, fontWeight="bold")
+    .mark_text(
+      baseline="middle",
+      dy=-8,
+      fontSize=13,
+      fontWeight="bold",
+      color=TEXT_DARK,
+    )
     .encode(
       x=alt.X("problem:N", sort=columns),
       y=alt.Y("model:N", sort=[row["label"] for row in rows]),
-      text="label:N",
+      text="count_label:N",
+      opacity=alt.condition(alt.datum.count > 0, alt.value(1), alt.value(0.65)),
+    )
+  )
+  cfr_text = (
+    alt.Chart(frame)
+    .mark_text(
+      baseline="middle",
+      dy=9,
+      fontSize=10,
+      fontWeight="normal",
+      color="#335a61",
+    )
+    .encode(
+      x=alt.X("problem:N", sort=columns),
+      y=alt.Y("model:N", sort=[row["label"] for row in rows]),
+      text="cfr_label:N",
+      opacity=alt.condition(alt.datum.count > 0, alt.value(1), alt.value(0)),
     )
   )
   st.altair_chart(
-    alt.layer(rect, text).properties(height=max(320, len(rows) * 42)),
+    alt.layer(rect, count_text, cfr_text).properties(height=max(340, len(rows) * 46)),
     width="stretch",
   )
 
