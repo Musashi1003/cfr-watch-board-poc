@@ -423,7 +423,7 @@ def render_pareto_frame(title: str, rows: list[dict], empty_message: str):
     .mark_point(color=LINE_COLOR, filled=True, size=62)
     .encode(
       x=alt.X("short_label:N", sort=None),
-      y=alt.Y("cumulative:Q", scale=alt.Scale(domain=[0, 100])),
+      y=alt.Y("cumulative:Q", scale=alt.Scale(domain=[0, 100]), axis=None),
       tooltip=[
         alt.Tooltip("label:N", title="Item"),
         alt.Tooltip("cumulative:Q", title="Cumulative", format=".1f"),
