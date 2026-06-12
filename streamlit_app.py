@@ -1,7 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hmac
 import os
+from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -56,9 +57,9 @@ def password_gate() -> bool:
 
   st.markdown("### CFR Watch Board Login")
   if expected_username:
-    st.info(f"使用說明：帳號請輸入 `{expected_username}`；密碼請向管理者索取。")
+    st.info(f"Account: `{expected_username}`. Please ask the dashboard owner for the password.")
   else:
-    st.info("使用說明：請輸入管理者提供的共用密碼。")
+    st.info("Please enter the shared password provided by the dashboard owner.")
   with st.form("login_form"):
     username = st.text_input("Account", value="", disabled=not bool(expected_username))
     password = st.text_input("Password", type="password")
@@ -86,8 +87,14 @@ def apply_page_style():
         padding-bottom: 2.5rem;
         max-width: 1480px;
       }
+      .stApp {
+        background: #f6f9fb;
+      }
       [data-testid="stSidebar"] {
-        background: #f3f6f6;
+        background: linear-gradient(180deg, #0d2635 0%, #14384a 100%);
+      }
+      [data-testid="stSidebar"] * {
+        color: #eef7f8;
       }
       .cfr-title {
         color: #122426;
@@ -100,12 +107,34 @@ def apply_page_style():
         font-size: 0.98rem;
         margin-bottom: 1.1rem;
       }
+      .dashboard-head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 1rem;
+        margin: 1rem 0 0.8rem 0;
+      }
+      .dashboard-head h2 {
+        font-size: 1.45rem;
+        margin: 0 0 0.2rem 0;
+      }
+      .dashboard-head p {
+        color: #62767b;
+        margin: 0;
+      }
+      .refresh-note {
+        color: #557179;
+        font-size: 0.85rem;
+        white-space: nowrap;
+      }
       .metric-card {
-        background: #fffdf8;
+        background: linear-gradient(135deg, #ffffff 0%, #f9fffd 100%);
         border: 1px solid #e5e0d8;
         border-radius: 8px;
         padding: 1rem 1.1rem;
-        min-height: 132px;
+        min-height: 150px;
+        box-shadow: 0 10px 24px rgba(16, 35, 42, 0.06);
+        border-top: 4px solid var(--accent, #138a8e);
       }
       .metric-label {
         color: #4d6568;
@@ -122,6 +151,18 @@ def apply_page_style():
         color: #607478;
         font-size: 0.82rem;
         margin-top: 0.65rem;
+      }
+      .metric-delta {
+        display: inline-block;
+        color: var(--accent, #138a8e);
+        font-size: 0.78rem;
+        font-weight: 700;
+        margin-top: 0.75rem;
+      }
+      .sparkline {
+        width: 100%;
+        height: 32px;
+        margin-top: 0.75rem;
       }
       h2, h3 {
         color: #0c1c1f;
@@ -146,6 +187,46 @@ def whole(value: float | int | None) -> str:
   if value is None:
     return "N/A"
   return f"{value:,.0f}"
+
+
+def sparkline_svg(values: list[int], color: str) -> str:
+  if len(values) < 2:
+    return ""
+
+  width = 220
+  height = 34
+  padding = 3
+  min_value = min(values)
+  max_value = max(values)
+  span = max(max_value - min_value, 1)
+  points = []
+  for index, value in enumerate(values):
+    x = padding + index * ((width - padding * 2) / (len(values) - 1))
+    y = height - padding - ((value - min_value) / span) * (height - padding * 2)
+    points.append(f"{x:.1f},{y:.1f}")
+  return (
+    f'<svg class="sparkline" viewBox="0 0 {width} {height}" preserveAspectRatio="none">'
+    f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}" stroke-width="3" '
+    'stroke-linecap="round" stroke-linejoin="round" />'
+    f'<circle cx="{points[-1].split(",")[0]}" cy="{points[-1].split(",")[1]}" r="3.2" fill="{color}" />'
+    '</svg>'
+  )
+
+
+def dashboard_header(result: dict):
+  latest_week = result["kpis"]["latest_week"]
+  st.markdown(
+    f"""
+    <div class="dashboard-head">
+      <div>
+        <h2>Overview Dashboard</h2>
+        <p>Carry risk and CTX-style watch signals from weekly raw-data uploads.</p>
+      </div>
+      <div class="refresh-note">Data updated: {datetime.now().strftime("%Y-%m-%d %H:%M")} 繚 Latest week: {latest_week}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+  )
 
 
 def write_uploads_to_temp_files(uploaded_files) -> tuple[list[WorkbookUpload], list[Path]]:
@@ -176,6 +257,9 @@ def parse_uploaded_files(uploaded_files) -> dict:
 def selected_filters(records: list[dict]) -> dict[str, list[str]]:
   selections: dict[str, list[str]] = {}
   with st.sidebar:
+    st.markdown("## CFR Watch Board")
+    st.caption("Overview 繚 Trend 繚 Ratio 繚 Pareto 繚 Matrix")
+    st.divider()
     st.header("Filters")
     st.caption("Leave a filter empty to include all values.")
     for key in FILTER_FIELDS:
@@ -194,19 +278,52 @@ def selected_filters(records: list[dict]) -> dict[str, list[str]]:
 def metric_row(result: dict):
   kpis = result["kpis"]
   cols = st.columns(4)
+  trend_values = [row["count"] for row in result.get("trend", [])]
+  week_delta = kpis["week_delta"]
+  delta_color = "#d83b35" if week_delta > 0 else "#12805c" if week_delta < 0 else "#557179"
   cards = [
-    ("Filtered CFR", pct(kpis["filtered_cfr"]), f"{whole(kpis['filtered_failure_qty'])} failures / {whole(kpis['derived_act'])} derived ACT"),
-    ("Failure Qty", whole(kpis["filtered_failure_qty"]), "Filtered raw-data failures"),
-    ("Derived ACT", whole(kpis["derived_act"]), f"From SUMMARY_IEC CFR rule; {whole(kpis['act_model_count'])} ACT models"),
-    ("Latest WoW", f"{kpis['week_delta']:+,}", f"{kpis['previous_week']} to {kpis['latest_week']}"),
+    {
+      "label": "Filtered CFR",
+      "value": pct(kpis["filtered_cfr"]),
+      "note": f"{whole(kpis['filtered_failure_qty'])} failures / {whole(kpis['derived_act'])} derived ACT",
+      "accent": "#138a8e",
+      "delta": f"Target CFR: {pct(kpis['target_cfr'])}",
+      "spark": "",
+    },
+    {
+      "label": "Failure Qty",
+      "value": whole(kpis["filtered_failure_qty"]),
+      "note": "Filtered raw-data failures",
+      "accent": "#d83b35",
+      "delta": f"Latest week: {whole(kpis['latest_count'])}",
+      "spark": sparkline_svg(trend_values, "#d83b35"),
+    },
+    {
+      "label": "Derived ACT",
+      "value": whole(kpis["derived_act"]),
+      "note": f"From SUMMARY_IEC CFR rule; {whole(kpis['act_model_count'])} ACT models",
+      "accent": "#f28c28",
+      "delta": "Current-upload estimate only",
+      "spark": "",
+    },
+    {
+      "label": "Latest WoW",
+      "value": f"{week_delta:+,}",
+      "note": f"{kpis['previous_week']} to {kpis['latest_week']}",
+      "accent": delta_color,
+      "delta": "Failure count change",
+      "spark": sparkline_svg(trend_values[-6:], delta_color),
+    },
   ]
-  for column, (label, value, note) in zip(cols, cards):
+  for column, card in zip(cols, cards):
     column.markdown(
       f"""
-      <div class="metric-card">
-        <div class="metric-label">{label}</div>
-        <div class="metric-value">{value}</div>
-        <div class="metric-note">{note}</div>
+      <div class="metric-card" style="--accent: {card['accent']};">
+        <div class="metric-label">{card['label']}</div>
+        <div class="metric-value">{card['value']}</div>
+        <div class="metric-note">{card['note']}</div>
+        <div class="metric-delta">{card['delta']}</div>
+        {card['spark']}
       </div>
       """,
       unsafe_allow_html=True,
@@ -218,8 +335,8 @@ def bar_chart(frame: pd.DataFrame, x_column: str, y_column: str, height: int = 2
     alt.Chart(frame)
     .mark_bar(color="#138a8e", cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
     .encode(
-      x=alt.X(f"{x_column}:N", sort="-y", axis=alt.Axis(labelAngle=-45, title=None)),
-      y=alt.Y(f"{y_column}:Q", axis=alt.Axis(title=None)),
+      y=alt.Y(f"{x_column}:N", sort="-x", axis=alt.Axis(title=None, labelLimit=180)),
+      x=alt.X(f"{y_column}:Q", axis=alt.Axis(title=None)),
       tooltip=[
         alt.Tooltip(f"{x_column}:N", title="Item"),
         alt.Tooltip(f"{y_column}:Q", title="Count"),
@@ -227,7 +344,7 @@ def bar_chart(frame: pd.DataFrame, x_column: str, y_column: str, height: int = 2
     )
     .properties(height=height)
   )
-  st.altair_chart(chart, use_container_width=True)
+  st.altair_chart(chart, width="stretch")
 
 
 def render_ratio(title: str, rows: list[dict]):
@@ -235,13 +352,15 @@ def render_ratio(title: str, rows: list[dict]):
   if not rows:
     st.info("No records in the current filter.")
     return
-  frame = pd.DataFrame(rows)
-  bar_chart(frame, "label", "count")
+  frame = pd.DataFrame(rows).head(10)
+  bar_chart(frame, "label", "count", height=max(240, len(frame) * 28))
+  table = frame.copy()
+  table.insert(0, "rank", range(1, len(table) + 1))
+  table["share"] = table["share"].map(lambda value: f"{value:.1f}%")
+  table = table.rename(columns={"label": "item", "count": "failure_qty", "share": "share"})
   st.dataframe(
-    frame.assign(Share=frame["share"].map(lambda value: f"{value:.1f}%"))[
-      ["label", "count", "Share"]
-    ],
-    use_container_width=True,
+    table[["rank", "item", "failure_qty", "share"]],
+    width="stretch",
     hide_index=True,
   )
 
@@ -265,7 +384,7 @@ def render_trend(result: dict):
     )
     .properties(height=300)
   )
-  st.altair_chart(chart, use_container_width=True)
+  st.altair_chart(chart, width="stretch")
 
 
 def render_pareto(result: dict):
@@ -274,10 +393,46 @@ def render_pareto(result: dict):
   if pareto.empty:
     st.info("No problem data in the current filter.")
     return
+  pareto = pareto.head(12).copy()
+  pareto["short_label"] = pareto["label"].str.slice(0, 26)
+  bars = (
+    alt.Chart(pareto)
+    .mark_bar(color="#138a8e", cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+    .encode(
+      x=alt.X("short_label:N", sort=None, axis=alt.Axis(title=None, labelAngle=-35, labelLimit=90)),
+      y=alt.Y("count:Q", axis=alt.Axis(title="Failure Qty")),
+      tooltip=[
+        alt.Tooltip("label:N", title="Problem"),
+        alt.Tooltip("count:Q", title="Failure Qty"),
+        alt.Tooltip("share:Q", title="Share", format=".1f"),
+        alt.Tooltip("cumulative:Q", title="Cumulative", format=".1f"),
+      ],
+    )
+  )
+  line = (
+    alt.Chart(pareto)
+    .mark_line(point=True, color="#f28c28", strokeWidth=2.5)
+    .encode(
+      x=alt.X("short_label:N", sort=None),
+      y=alt.Y("cumulative:Q", axis=alt.Axis(title="Cumulative %", orient="right")),
+      tooltip=[
+        alt.Tooltip("label:N", title="Problem"),
+        alt.Tooltip("cumulative:Q", title="Cumulative", format=".1f"),
+      ],
+    )
+  )
+  st.altair_chart(
+    alt.layer(bars, line).resolve_scale(y="independent").properties(height=320),
+    width="stretch",
+  )
   table = pareto.copy()
   table["share"] = table["share"].map(lambda value: f"{value:.1f}%")
   table["cumulative"] = table["cumulative"].map(lambda value: f"{value:.1f}%")
-  st.dataframe(table, use_container_width=True, hide_index=True)
+  st.dataframe(
+    table[["label", "count", "share", "cumulative"]],
+    width="stretch",
+    hide_index=True,
+  )
 
 
 def render_heatmap(result: dict):
@@ -300,41 +455,56 @@ def render_heatmap(result: dict):
     columns=columns,
   )
 
-  display_frame = count_frame.astype(str)
-  for row_label in display_frame.index:
-    for column_label in display_frame.columns:
+  heatmap_rows = []
+  has_cfr = cfr_frame.notna().any().any()
+  for row_label in count_frame.index:
+    for column_label in count_frame.columns:
+      count = int(count_frame.loc[row_label, column_label])
       cfr_value = cfr_frame.loc[row_label, column_label]
-      if count_frame.loc[row_label, column_label] and pd.notna(cfr_value):
-        display_frame.loc[row_label, column_label] = (
-          f"{count_frame.loc[row_label, column_label]} ({pct(cfr_value)})"
-        )
+      color_value = cfr_value * 100 if has_cfr and pd.notna(cfr_value) else count
+      heatmap_rows.append(
+        {
+          "model": row_label,
+          "problem": column_label,
+          "count": count,
+          "cfr_pct": cfr_value * 100 if pd.notna(cfr_value) else None,
+          "color_value": color_value,
+          "label": f"{count}\n{cfr_value * 100:.2f}%" if count and pd.notna(cfr_value) else str(count),
+        }
+      )
 
-  max_cfr = cfr_frame.max(numeric_only=True).max()
-  max_count = count_frame.max(numeric_only=True).max()
-
-  def cell_styles(_: pd.DataFrame) -> pd.DataFrame:
-    styles = pd.DataFrame("", index=display_frame.index, columns=display_frame.columns)
-    for row_label in display_frame.index:
-      for column_label in display_frame.columns:
-        count = count_frame.loc[row_label, column_label]
-        cfr_value = cfr_frame.loc[row_label, column_label]
-        if not count:
-          styles.loc[row_label, column_label] = "background-color: #f6fbfb; color: #5f6f72;"
-          continue
-        denominator = max_cfr if pd.notna(cfr_value) and max_cfr else max_count
-        value = cfr_value if pd.notna(cfr_value) and max_cfr else count
-        intensity = min(float(value or 0) / float(denominator or 1), 1)
-        lightness = int(94 - 42 * intensity)
-        styles.loc[row_label, column_label] = (
-          f"background-color: hsl(183, 36%, {lightness}%); "
-          "color: #071316; font-weight: 650; text-align: center;"
-        )
-    return styles
-
-  st.dataframe(
-    display_frame.style.apply(cell_styles, axis=None),
-    use_container_width=True,
-    height=360,
+  frame = pd.DataFrame(heatmap_rows)
+  rect = (
+    alt.Chart(frame)
+    .mark_rect(stroke="#ffffff", strokeWidth=1.5)
+    .encode(
+      x=alt.X("problem:N", sort=columns, axis=alt.Axis(title=None, labelAngle=-30, labelLimit=120)),
+      y=alt.Y("model:N", sort=[row["label"] for row in rows], axis=alt.Axis(title=None, labelLimit=120)),
+      color=alt.Color(
+        "color_value:Q",
+        scale=alt.Scale(scheme="tealblues"),
+        legend=alt.Legend(title="CFR %" if has_cfr else "Failure Qty"),
+      ),
+      tooltip=[
+        alt.Tooltip("model:N", title="Model"),
+        alt.Tooltip("problem:N", title="Problem"),
+        alt.Tooltip("count:Q", title="Failure Qty"),
+        alt.Tooltip("cfr_pct:Q", title="CFR %", format=".2f"),
+      ],
+    )
+  )
+  text = (
+    alt.Chart(frame)
+    .mark_text(color="#071316", fontSize=11, fontWeight="bold")
+    .encode(
+      x=alt.X("problem:N", sort=columns),
+      y=alt.Y("model:N", sort=[row["label"] for row in rows]),
+      text="label:N",
+    )
+  )
+  st.altair_chart(
+    alt.layer(rect, text).properties(height=max(320, len(rows) * 42)),
+    width="stretch",
   )
 
 
@@ -397,6 +567,7 @@ def main():
     filters=selections,
   )
 
+  dashboard_header(result)
   metric_row(result)
   st.divider()
 
@@ -417,3 +588,4 @@ def main():
 
 if __name__ == "__main__":
   main()
+
