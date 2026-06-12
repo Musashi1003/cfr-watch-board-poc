@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hmac
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -217,6 +218,32 @@ def whole(value: float | int | None) -> str:
   return f"{value:,.0f}"
 
 
+def nice_axis_values(max_value: float | int | None) -> list[int]:
+  if not max_value or max_value <= 0:
+    return [0]
+
+  if max_value <= 2:
+    upper = int(math.ceil(max_value))
+    return [0, upper] if upper == 1 else [0, 1, upper]
+
+  target = max_value * 1.05
+  exponent = math.floor(math.log10(target))
+  base = 10 ** exponent
+  fraction = target / base
+  if fraction <= 1:
+    nice_fraction = 1
+  elif fraction <= 2:
+    nice_fraction = 2
+  elif fraction <= 5:
+    nice_fraction = 5
+  else:
+    nice_fraction = 10
+
+  upper = int(nice_fraction * base)
+  middle = int(upper / 2)
+  return [0, middle, upper]
+
+
 def sparkline_svg(values: list[int], color: str) -> str:
   if len(values) < 2:
     return ""
@@ -356,12 +383,13 @@ def metric_row(result: dict):
 
 
 def bar_chart(frame: pd.DataFrame, x_column: str, y_column: str, height: int = 260):
+  axis_values = nice_axis_values(frame[y_column].max() if not frame.empty else 0)
   chart = (
     alt.Chart(frame)
     .mark_bar(color=BAR_COLOR, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
     .encode(
       y=alt.Y(f"{x_column}:N", sort="-x", axis=alt.Axis(title=None, labelLimit=180)),
-      x=alt.X(f"{y_column}:Q", axis=alt.Axis(title=None, tickCount=2)),
+      x=alt.X(f"{y_column}:Q", axis=alt.Axis(title=None, values=axis_values)),
       tooltip=[
         alt.Tooltip(f"{x_column}:N", title="Item"),
         alt.Tooltip(f"{y_column}:Q", title="Count"),
@@ -391,13 +419,14 @@ def render_pareto_frame(title: str, rows: list[dict], empty_message: str):
   if pareto.empty:
     st.info(empty_message)
     return
+  count_axis_values = nice_axis_values(pareto["count"].max())
 
   bars = (
     alt.Chart(pareto)
     .mark_bar(color=BAR_LIGHT_COLOR, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
     .encode(
       x=alt.X("short_label:N", sort=None, axis=alt.Axis(title=None, labelAngle=-35, labelLimit=90)),
-      y=alt.Y("count:Q", axis=alt.Axis(title=None, tickCount=2, grid=True)),
+      y=alt.Y("count:Q", axis=alt.Axis(title=None, values=count_axis_values, grid=True)),
       tooltip=[
         alt.Tooltip("label:N", title="Item"),
         alt.Tooltip("count:Q", title="Failure Qty"),
@@ -414,7 +443,7 @@ def render_pareto_frame(title: str, rows: list[dict], empty_message: str):
       y=alt.Y(
         "cumulative:Q",
         scale=alt.Scale(domain=[0, 100]),
-        axis=alt.Axis(title=None, orient="right", values=[0, 100], grid=False),
+        axis=alt.Axis(title=None, orient="right", values=[0, 50, 100], grid=False),
       ),
     )
   )
@@ -470,12 +499,13 @@ def render_trend(result: dict):
   if trend.empty:
     st.info("No trend data in the current filter.")
     return
+  axis_values = nice_axis_values(trend["count"].max())
   chart = (
     alt.Chart(trend)
     .mark_line(point=True, color="#138a8e", strokeWidth=2.5)
     .encode(
       x=alt.X("week:N", axis=alt.Axis(labelAngle=-45, title=None)),
-      y=alt.Y("count:Q", axis=alt.Axis(title=None, tickCount=2)),
+      y=alt.Y("count:Q", axis=alt.Axis(title=None, values=axis_values)),
       tooltip=[
         alt.Tooltip("week:N", title="Week"),
         alt.Tooltip("count:Q", title="Failure Qty"),
