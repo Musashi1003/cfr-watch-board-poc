@@ -201,6 +201,32 @@ def render_ratio(title: str, rows: list[dict]):
   )
 
 
+def render_source_summary(rows: list[dict]):
+  st.subheader("Source Coverage")
+  if not rows:
+    st.info("No source data in the current filter.")
+    return
+
+  frame = pd.DataFrame(rows)
+  total = int(frame["count"].sum())
+  source_text = " / ".join(
+    f"{row.label}: {int(row.count)} ({row.share:.1f}%)"
+    for row in frame.itertuples()
+  )
+  st.markdown(
+    f"""
+    <div class="metric-card">
+      <div class="metric-label">Uploaded source mix</div>
+      <div class="metric-value">{total:,}</div>
+      <div class="metric-note">{source_text}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+  )
+  if len(frame) == 1:
+    st.caption("Only one source type is present, so a mix chart would not add useful signal.")
+
+
 def render_trend(result: dict):
   st.subheader("Weekly Failure Trend")
   trend = pd.DataFrame(result["trend"])
@@ -347,11 +373,11 @@ def main():
   metric_row(result)
   st.divider()
 
-  left, right = st.columns([1.1, 1])
+  left, right = st.columns([1.45, 0.75])
   with left:
     render_trend(result)
   with right:
-    render_ratio("Gaming / PC Mix", result["source_mix"])
+    render_source_summary(result["source_mix"])
 
   left, right = st.columns(2)
   with left:
