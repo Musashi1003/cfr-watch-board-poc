@@ -518,14 +518,14 @@ def render_heatmap(result: dict):
     columns=columns,
   )
 
-  heatmap_rows = []
+  raw_rows = []
   has_cfr = cfr_frame.notna().any().any()
   for row_label in count_frame.index:
     for column_label in count_frame.columns:
       count = int(count_frame.loc[row_label, column_label])
       cfr_value = cfr_frame.loc[row_label, column_label]
       color_value = cfr_value * 100 if has_cfr and pd.notna(cfr_value) else count
-      heatmap_rows.append(
+      raw_rows.append(
         {
           "model": row_label,
           "problem": column_label,
@@ -537,7 +537,13 @@ def render_heatmap(result: dict):
         }
       )
 
-  frame = pd.DataFrame(heatmap_rows)
+  max_color_value = max((row["color_value"] or 0 for row in raw_rows), default=0)
+  for row in raw_rows:
+    is_dark_cell = bool(row["count"] and max_color_value and row["color_value"] / max_color_value >= 0.72)
+    row["label_color"] = "#ffffff" if is_dark_cell else TEXT_DARK
+    row["cfr_color"] = "#e8f7f7" if is_dark_cell else "#335a61"
+
+  frame = pd.DataFrame(raw_rows)
   rect = (
     alt.Chart(frame)
     .mark_rect(stroke="#ffffff", strokeWidth=1.5)
@@ -564,12 +570,12 @@ def render_heatmap(result: dict):
       dy=-8,
       fontSize=13,
       fontWeight="bold",
-      color=TEXT_DARK,
     )
     .encode(
       x=alt.X("problem:N", sort=columns),
       y=alt.Y("model:N", sort=[row["label"] for row in rows]),
       text="count_label:N",
+      color=alt.Color("label_color:N", scale=None, legend=None),
       opacity=alt.condition(alt.datum.count > 0, alt.value(1), alt.value(0.65)),
     )
   )
@@ -579,13 +585,13 @@ def render_heatmap(result: dict):
       baseline="middle",
       dy=9,
       fontSize=10,
-      fontWeight="normal",
-      color="#335a61",
+      fontWeight="bold",
     )
     .encode(
       x=alt.X("problem:N", sort=columns),
       y=alt.Y("model:N", sort=[row["label"] for row in rows]),
       text="cfr_label:N",
+      color=alt.Color("cfr_color:N", scale=None, legend=None),
       opacity=alt.condition(alt.datum.count > 0, alt.value(1), alt.value(0)),
     )
   )
