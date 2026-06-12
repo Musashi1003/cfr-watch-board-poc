@@ -537,12 +537,6 @@ def render_heatmap(result: dict):
         }
       )
 
-  max_color_value = max((row["color_value"] or 0 for row in raw_rows), default=0)
-  for row in raw_rows:
-    is_dark_cell = bool(row["count"] and max_color_value and row["color_value"] / max_color_value >= 0.72)
-    row["label_color"] = "#ffffff" if is_dark_cell else TEXT_DARK
-    row["cfr_color"] = "#e8f7f7" if is_dark_cell else "#335a61"
-
   frame = pd.DataFrame(raw_rows)
   rect = (
     alt.Chart(frame)
@@ -552,7 +546,7 @@ def render_heatmap(result: dict):
       y=alt.Y("model:N", sort=[row["label"] for row in rows], axis=alt.Axis(title=None, labelLimit=120)),
       color=alt.Color(
         "color_value:Q",
-        scale=alt.Scale(scheme="tealblues"),
+        scale=alt.Scale(range=["#e9f7f5", "#a8dad7", "#5fb7bc", "#1a9295"]),
         legend=alt.Legend(title="CFR %" if has_cfr else "Failure Qty"),
       ),
       tooltip=[
@@ -575,7 +569,6 @@ def render_heatmap(result: dict):
       x=alt.X("problem:N", sort=columns),
       y=alt.Y("model:N", sort=[row["label"] for row in rows]),
       text="count_label:N",
-      color=alt.Color("label_color:N", scale=None, legend=None),
       opacity=alt.condition(alt.datum.count > 0, alt.value(1), alt.value(0.65)),
     )
   )
@@ -586,12 +579,12 @@ def render_heatmap(result: dict):
       dy=9,
       fontSize=10,
       fontWeight="bold",
+      color="#335a61",
     )
     .encode(
       x=alt.X("problem:N", sort=columns),
       y=alt.Y("model:N", sort=[row["label"] for row in rows]),
       text="cfr_label:N",
-      color=alt.Color("cfr_color:N", scale=None, legend=None),
       opacity=alt.condition(alt.datum.count > 0, alt.value(1), alt.value(0)),
     )
   )
