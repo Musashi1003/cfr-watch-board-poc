@@ -147,12 +147,11 @@ def selected_filters(records: list[dict]) -> dict[str, list[str]]:
 
 def metric_row(result: dict):
   kpis = result["kpis"]
-  cols = st.columns(5)
+  cols = st.columns(4)
   cards = [
     ("Filtered CFR", pct(kpis["filtered_cfr"]), f"{whole(kpis['filtered_failure_qty'])} failures / {whole(kpis['derived_act'])} derived ACT"),
     ("Failure Qty", whole(kpis["filtered_failure_qty"]), "Filtered raw-data failures"),
-    ("Derived ACT", whole(kpis["derived_act"]), "From SUMMARY_IEC CFR rule"),
-    ("ACT Model Coverage", whole(kpis["act_model_count"]), f"Target CFR: {pct(kpis['target_cfr'])}"),
+    ("Derived ACT", whole(kpis["derived_act"]), f"From SUMMARY_IEC CFR rule; {whole(kpis['act_model_count'])} ACT models"),
     ("Latest WoW", f"{kpis['week_delta']:+,}", f"{kpis['previous_week']} to {kpis['latest_week']}"),
   ]
   for column, (label, value, note) in zip(cols, cards):
@@ -199,32 +198,6 @@ def render_ratio(title: str, rows: list[dict]):
     use_container_width=True,
     hide_index=True,
   )
-
-
-def render_source_summary(rows: list[dict]):
-  st.subheader("Source Coverage")
-  if not rows:
-    st.info("No source data in the current filter.")
-    return
-
-  frame = pd.DataFrame(rows)
-  total = int(frame["count"].sum())
-  source_text = " / ".join(
-    f"{row.label}: {int(row.count)} ({row.share:.1f}%)"
-    for row in frame.itertuples()
-  )
-  st.markdown(
-    f"""
-    <div class="metric-card">
-      <div class="metric-label">Uploaded source mix</div>
-      <div class="metric-value">{total:,}</div>
-      <div class="metric-note">{source_text}</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-  )
-  if len(frame) == 1:
-    st.caption("Only one source type is present, so a mix chart would not add useful signal.")
 
 
 def render_trend(result: dict):
@@ -373,11 +346,7 @@ def main():
   metric_row(result)
   st.divider()
 
-  left, right = st.columns([1.45, 0.75])
-  with left:
-    render_trend(result)
-  with right:
-    render_source_summary(result["source_mix"])
+  render_trend(result)
 
   left, right = st.columns(2)
   with left:
