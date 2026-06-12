@@ -361,7 +361,7 @@ def bar_chart(frame: pd.DataFrame, x_column: str, y_column: str, height: int = 2
     .mark_bar(color=BAR_COLOR, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
     .encode(
       y=alt.Y(f"{x_column}:N", sort="-x", axis=alt.Axis(title=None, labelLimit=180)),
-      x=alt.X(f"{y_column}:Q", axis=alt.Axis(title=None)),
+      x=alt.X(f"{y_column}:Q", axis=alt.Axis(title=None, tickCount=2)),
       tooltip=[
         alt.Tooltip(f"{x_column}:N", title="Item"),
         alt.Tooltip(f"{y_column}:Q", title="Count"),
@@ -397,7 +397,7 @@ def render_pareto_frame(title: str, rows: list[dict], empty_message: str):
     .mark_bar(color=BAR_LIGHT_COLOR, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
     .encode(
       x=alt.X("short_label:N", sort=None, axis=alt.Axis(title=None, labelAngle=-35, labelLimit=90)),
-      y=alt.Y("count:Q", axis=alt.Axis(title="Failure Qty")),
+      y=alt.Y("count:Q", axis=alt.Axis(title=None, tickCount=2, grid=True)),
       tooltip=[
         alt.Tooltip("label:N", title="Item"),
         alt.Tooltip("count:Q", title="Failure Qty"),
@@ -411,7 +411,11 @@ def render_pareto_frame(title: str, rows: list[dict], empty_message: str):
     .mark_line(color=LINE_COLOR, strokeWidth=2.8)
     .encode(
       x=alt.X("short_label:N", sort=None),
-      y=alt.Y("cumulative:Q", axis=alt.Axis(title="Cumulative %", orient="right")),
+      y=alt.Y(
+        "cumulative:Q",
+        scale=alt.Scale(domain=[0, 100]),
+        axis=alt.Axis(title=None, orient="right", values=[0, 100], grid=False),
+      ),
     )
   )
   points = (
@@ -419,7 +423,7 @@ def render_pareto_frame(title: str, rows: list[dict], empty_message: str):
     .mark_point(color=LINE_COLOR, filled=True, size=62)
     .encode(
       x=alt.X("short_label:N", sort=None),
-      y=alt.Y("cumulative:Q"),
+      y=alt.Y("cumulative:Q", scale=alt.Scale(domain=[0, 100])),
       tooltip=[
         alt.Tooltip("label:N", title="Item"),
         alt.Tooltip("cumulative:Q", title="Cumulative", format=".1f"),
@@ -471,7 +475,7 @@ def render_trend(result: dict):
     .mark_line(point=True, color="#138a8e", strokeWidth=2.5)
     .encode(
       x=alt.X("week:N", axis=alt.Axis(labelAngle=-45, title=None)),
-      y=alt.Y("count:Q", axis=alt.Axis(title=None)),
+      y=alt.Y("count:Q", axis=alt.Axis(title=None, tickCount=2)),
       tooltip=[
         alt.Tooltip("week:N", title="Week"),
         alt.Tooltip("count:Q", title="Failure Qty"),
