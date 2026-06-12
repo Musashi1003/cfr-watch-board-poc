@@ -275,9 +275,8 @@ def dashboard_header(result: dict):
     <div class="dashboard-head">
       <div>
         <h2>Overview Dashboard</h2>
-        <p>Carry risk and CTX-style watch signals from weekly raw-data uploads.</p>
       </div>
-      <div class="refresh-note">Data updated: {datetime.now().strftime("%Y-%m-%d %H:%M")} 繚 Latest week: {latest_week}</div>
+      <div class="refresh-note">Updated: {datetime.now().strftime("%Y-%m-%d %H:%M")} | Latest week: {latest_week}</div>
     </div>
     """,
     unsafe_allow_html=True,
