@@ -33,6 +33,13 @@ FILTER_LABELS = {
   "problem_mapping": "Problem",
 }
 
+BAR_COLOR = "#1a9295"
+BAR_LIGHT_COLOR = "#8fd6d5"
+LINE_COLOR = "#075f73"
+ACCENT_GREEN = "#12805c"
+ACCENT_RED = "#d83b35"
+TEXT_DARK = "#071316"
+
 
 def read_secret(name: str) -> str:
   value = os.environ.get(name, "")
@@ -91,10 +98,31 @@ def apply_page_style():
         background: #f6f9fb;
       }
       [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0d2635 0%, #14384a 100%);
+        background: #f8fbfc;
+        border-right: 1px solid #dce8ea;
       }
-      [data-testid="stSidebar"] * {
-        color: #eef7f8;
+      [data-testid="stSidebar"] h1,
+      [data-testid="stSidebar"] h2,
+      [data-testid="stSidebar"] h3,
+      [data-testid="stSidebar"] p,
+      [data-testid="stSidebar"] label {
+        color: #122426;
+      }
+      [data-testid="stSidebar"] [data-baseweb="select"] > div {
+        background: #ffffff;
+        border-color: #cddbdd;
+      }
+      [data-testid="stSidebar"] [data-baseweb="select"] span,
+      [data-testid="stSidebar"] [data-baseweb="select"] input {
+        color: #122426 !important;
+      }
+      [data-testid="stSidebar"] [data-baseweb="tag"] {
+        background-color: #dff3f3 !important;
+        border-color: #b6dfdf !important;
+      }
+      [data-testid="stSidebar"] [data-baseweb="tag"] span {
+        color: #075f73 !important;
+        font-weight: 650;
       }
       .cfr-title {
         color: #122426;
@@ -257,9 +285,6 @@ def parse_uploaded_files(uploaded_files) -> dict:
 def selected_filters(records: list[dict]) -> dict[str, list[str]]:
   selections: dict[str, list[str]] = {}
   with st.sidebar:
-    st.markdown("## CFR Watch Board")
-    st.caption("Overview 繚 Trend 繚 Ratio 繚 Pareto 繚 Matrix")
-    st.divider()
     st.header("Filters")
     st.caption("Leave a filter empty to include all values.")
     for key in FILTER_FIELDS:
@@ -280,13 +305,13 @@ def metric_row(result: dict):
   cols = st.columns(4)
   trend_values = [row["count"] for row in result.get("trend", [])]
   week_delta = kpis["week_delta"]
-  delta_color = "#d83b35" if week_delta > 0 else "#12805c" if week_delta < 0 else "#557179"
+  delta_color = ACCENT_RED if week_delta > 0 else ACCENT_GREEN if week_delta < 0 else "#557179"
   cards = [
     {
       "label": "Filtered CFR",
       "value": pct(kpis["filtered_cfr"]),
       "note": f"{whole(kpis['filtered_failure_qty'])} failures / {whole(kpis['derived_act'])} derived ACT",
-      "accent": "#138a8e",
+      "accent": BAR_COLOR,
       "delta": f"Target CFR: {pct(kpis['target_cfr'])}",
       "spark": "",
     },
@@ -294,15 +319,15 @@ def metric_row(result: dict):
       "label": "Failure Qty",
       "value": whole(kpis["filtered_failure_qty"]),
       "note": "Filtered raw-data failures",
-      "accent": "#d83b35",
+      "accent": ACCENT_RED,
       "delta": f"Latest week: {whole(kpis['latest_count'])}",
-      "spark": sparkline_svg(trend_values, "#d83b35"),
+      "spark": sparkline_svg(trend_values, ACCENT_RED),
     },
     {
       "label": "Derived ACT",
       "value": whole(kpis["derived_act"]),
       "note": f"From SUMMARY_IEC CFR rule; {whole(kpis['act_model_count'])} ACT models",
-      "accent": "#f28c28",
+      "accent": LINE_COLOR,
       "delta": "Current-upload estimate only",
       "spark": "",
     },
@@ -333,7 +358,7 @@ def metric_row(result: dict):
 def bar_chart(frame: pd.DataFrame, x_column: str, y_column: str, height: int = 260):
   chart = (
     alt.Chart(frame)
-    .mark_bar(color="#138a8e", cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+    .mark_bar(color=BAR_COLOR, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
     .encode(
       y=alt.Y(f"{x_column}:N", sort="-x", axis=alt.Axis(title=None, labelLimit=180)),
       x=alt.X(f"{y_column}:Q", axis=alt.Axis(title=None)),
@@ -345,6 +370,76 @@ def bar_chart(frame: pd.DataFrame, x_column: str, y_column: str, height: int = 2
     .properties(height=height)
   )
   st.altair_chart(chart, width="stretch")
+
+
+def rows_to_pareto_frame(rows: list[dict], limit: int = 12) -> pd.DataFrame:
+  frame = pd.DataFrame(rows).head(limit).copy()
+  if frame.empty:
+    return frame
+  frame["cumulative_count"] = frame["count"].cumsum()
+  total = frame["count"].sum() or 1
+  if "share" not in frame:
+    frame["share"] = frame["count"] / total * 100
+  frame["cumulative"] = frame["cumulative_count"] / total * 100
+  frame["short_label"] = frame["label"].str.slice(0, 26)
+  return frame
+
+
+def render_pareto_frame(title: str, rows: list[dict], empty_message: str):
+  st.subheader(title)
+  pareto = rows_to_pareto_frame(rows)
+  if pareto.empty:
+    st.info(empty_message)
+    return
+
+  bars = (
+    alt.Chart(pareto)
+    .mark_bar(color=BAR_LIGHT_COLOR, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+    .encode(
+      x=alt.X("short_label:N", sort=None, axis=alt.Axis(title=None, labelAngle=-35, labelLimit=90)),
+      y=alt.Y("count:Q", axis=alt.Axis(title="Failure Qty")),
+      tooltip=[
+        alt.Tooltip("label:N", title="Item"),
+        alt.Tooltip("count:Q", title="Failure Qty"),
+        alt.Tooltip("share:Q", title="Share", format=".1f"),
+        alt.Tooltip("cumulative:Q", title="Cumulative", format=".1f"),
+      ],
+    )
+  )
+  line = (
+    alt.Chart(pareto)
+    .mark_line(color=LINE_COLOR, strokeWidth=2.8)
+    .encode(
+      x=alt.X("short_label:N", sort=None),
+      y=alt.Y("cumulative:Q", axis=alt.Axis(title="Cumulative %", orient="right")),
+    )
+  )
+  points = (
+    alt.Chart(pareto)
+    .mark_point(color=LINE_COLOR, filled=True, size=62)
+    .encode(
+      x=alt.X("short_label:N", sort=None),
+      y=alt.Y("cumulative:Q"),
+      tooltip=[
+        alt.Tooltip("label:N", title="Item"),
+        alt.Tooltip("cumulative:Q", title="Cumulative", format=".1f"),
+      ],
+    )
+  )
+  st.altair_chart(
+    alt.layer(bars, line, points).resolve_scale(y="independent").properties(height=320),
+    width="stretch",
+  )
+
+  table = pareto.copy()
+  table.insert(0, "rank", range(1, len(table) + 1))
+  table["share"] = table["share"].map(lambda value: f"{value:.1f}%")
+  table["cumulative"] = table["cumulative"].map(lambda value: f"{value:.1f}%")
+  st.dataframe(
+    table[["rank", "label", "count", "share", "cumulative"]],
+    width="stretch",
+    hide_index=True,
+  )
 
 
 def render_ratio(title: str, rows: list[dict]):
@@ -388,50 +483,18 @@ def render_trend(result: dict):
 
 
 def render_pareto(result: dict):
-  st.subheader("PROBLEM_Mapping Pareto")
-  pareto = pd.DataFrame(result["pareto"])
-  if pareto.empty:
-    st.info("No problem data in the current filter.")
-    return
-  pareto = pareto.head(12).copy()
-  pareto["short_label"] = pareto["label"].str.slice(0, 26)
-  bars = (
-    alt.Chart(pareto)
-    .mark_bar(color="#138a8e", cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-    .encode(
-      x=alt.X("short_label:N", sort=None, axis=alt.Axis(title=None, labelAngle=-35, labelLimit=90)),
-      y=alt.Y("count:Q", axis=alt.Axis(title="Failure Qty")),
-      tooltip=[
-        alt.Tooltip("label:N", title="Problem"),
-        alt.Tooltip("count:Q", title="Failure Qty"),
-        alt.Tooltip("share:Q", title="Share", format=".1f"),
-        alt.Tooltip("cumulative:Q", title="Cumulative", format=".1f"),
-      ],
-    )
+  render_pareto_frame(
+    "PROBLEM_Mapping Pareto",
+    result["pareto"],
+    "No problem data in the current filter.",
   )
-  line = (
-    alt.Chart(pareto)
-    .mark_line(point=True, color="#f28c28", strokeWidth=2.5)
-    .encode(
-      x=alt.X("short_label:N", sort=None),
-      y=alt.Y("cumulative:Q", axis=alt.Axis(title="Cumulative %", orient="right")),
-      tooltip=[
-        alt.Tooltip("label:N", title="Problem"),
-        alt.Tooltip("cumulative:Q", title="Cumulative", format=".1f"),
-      ],
-    )
-  )
-  st.altair_chart(
-    alt.layer(bars, line).resolve_scale(y="independent").properties(height=320),
-    width="stretch",
-  )
-  table = pareto.copy()
-  table["share"] = table["share"].map(lambda value: f"{value:.1f}%")
-  table["cumulative"] = table["cumulative"].map(lambda value: f"{value:.1f}%")
-  st.dataframe(
-    table[["label", "count", "share", "cumulative"]],
-    width="stretch",
-    hide_index=True,
+
+
+def render_module_pareto(result: dict):
+  render_pareto_frame(
+    "MUC_MODULE Pareto",
+    result["module_ratio"],
+    "No module data in the current filter.",
   )
 
 
@@ -577,7 +640,7 @@ def main():
   with left:
     render_ratio("ORG_MODEL(PRODUCT_DESC) Share", result["share"])
   with right:
-    render_ratio("MUC_MODULE Ratio", result["module_ratio"])
+    render_module_pareto(result)
 
   left, right = st.columns([1, 1.2])
   with left:
