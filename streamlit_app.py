@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hmac
+import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -29,6 +31,47 @@ FILTER_LABELS = {
   "muc_module": "Module",
   "problem_mapping": "Problem",
 }
+
+
+def read_secret(name: str) -> str:
+  value = os.environ.get(name, "")
+  if value:
+    return value
+  try:
+    return str(st.secrets.get(name, "") or "")
+  except Exception:
+    return ""
+
+
+def password_gate() -> bool:
+  expected_username = read_secret("APP_USERNAME").strip()
+  expected_password = read_secret("APP_PASSWORD")
+
+  if not expected_password:
+    st.error("Access control is not configured. Ask the app owner to set APP_PASSWORD in Streamlit secrets.")
+    return False
+
+  if st.session_state.get("authenticated"):
+    return True
+
+  st.markdown("### CFR Watch Board Login")
+  st.caption("Enter the shared pilot credentials to continue.")
+  with st.form("login_form"):
+    username = st.text_input("Account", value="", disabled=not bool(expected_username))
+    password = st.text_input("Password", type="password")
+    submitted = st.form_submit_button("Sign in")
+
+  if submitted:
+    username_ok = True
+    if expected_username:
+      username_ok = hmac.compare_digest(username.strip(), expected_username)
+    password_ok = hmac.compare_digest(password, expected_password)
+    if username_ok and password_ok:
+      st.session_state["authenticated"] = True
+      st.rerun()
+    st.error("Account or password is incorrect.")
+
+  return False
 
 
 def apply_page_style():
@@ -310,6 +353,14 @@ def main():
     '<div class="cfr-subtitle">Upload weekly Gaming NB and PC NB CFR workbooks, then filter by model, segment, ODM/OEM, module, and problem.</div>',
     unsafe_allow_html=True,
   )
+
+  if not password_gate():
+    return
+
+  with st.sidebar:
+    if st.button("Sign out"):
+      st.session_state.pop("authenticated", None)
+      st.rerun()
 
   uploaded_files = st.file_uploader(
     "Weekly CFR workbooks",

@@ -105,3 +105,22 @@ Important POC notes:
 - Do not upload customer-confidential data to a public app unless your internal policy allows it.
 - For internal production use, prefer company-approved hosting such as a company server or Azure Web App with access control.
 - Streamlit Cloud is best for a quick POC and user feedback, not final governance.
+
+### Streamlit POC access control
+
+The Streamlit POC has an app-level password gate. Credentials must be configured in Streamlit Cloud secrets, not committed to GitHub.
+
+In Streamlit Cloud:
+
+1. Open the app settings.
+2. Go to `Secrets`.
+3. Add:
+
+```toml
+APP_USERNAME = "iec"
+APP_PASSWORD = "replace-with-a-strong-shared-password"
+```
+
+`APP_USERNAME` is optional. `APP_PASSWORD` is required. If `APP_PASSWORD` is missing, the app will not show the upload dashboard.
+
+This is a POC control layer only. For formal production use, use Streamlit private viewer settings, company SSO, Azure Web App authentication, or an internal server approved by IT.
