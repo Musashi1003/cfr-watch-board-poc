@@ -1,0 +1,13 @@
+.edge-profile/
+prototype-shot.png
+__pycache__/
+*.py[cod]
+*.tmp
+*.log
+*.xlsx
+*.xlsm
+*.xls
+cfr_upload_debug.html
+cfr_watch_response.html
+server_stdout.log
+server_stderr.log

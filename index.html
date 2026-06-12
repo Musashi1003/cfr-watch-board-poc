@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sites Prototype</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="login-shell" id="login-shell">
+    <div class="login-card">
+      <p class="eyebrow">Employee Access</p>
+      <h1 class="login-title">先輸入工號，再進入網站入口</h1>
+      <p class="login-copy">
+        這一版先模擬內部網站入口。使用者需先輸入工號，
+        驗證通過後才可以進入 dashboard 與各工具入口。
+      </p>
+      <form class="login-form" id="login-form">
+        <label class="input-label" for="employee-id">工號</label>
+        <input id="employee-id" name="employee_id" type="text" placeholder="例如 IEC950458" autocomplete="off">
+        <button class="primary-btn login-btn" type="submit">進入網站</button>
+      </form>
+      <p class="login-hint">Prototype demo 目前只開放示範工號：<strong>IEC950458</strong></p>
+      <p class="login-error" id="login-error" hidden>工號不在目前示範名單內，請重新輸入。</p>
+    </div>
+  </div>
+
+  <div class="page-shell">
+    <div class="access-bar">
+      <div>
+        <p class="strip-title">Signed In</p>
+        <strong id="active-employee-id">IEC950458</strong>
+      </div>
+      <button class="ghost-btn logout-btn" type="button" id="logout-btn">登出</button>
+    </div>
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Independent Simulation</p>
+        <h1>先做一個不影響 LOCAL UI 的新入口模擬</h1>
+        <p class="hero-text">
+          這個版本是獨立 prototype，用來預覽未來如果把幾個既有工具整理成單一入口，
+          操作體驗大概會長什麼樣子。現有 LOCAL UI 不需要改，也不會被覆蓋。
+        </p>
+        <div class="hero-actions">
+          <button class="primary-btn" type="button" data-scroll-target="#site-grid">看模擬入口</button>
+          <button class="ghost-btn" type="button" data-scroll-target="#roadmap">看下一步</button>
+        </div>
+      </div>
+      <section class="hero-panel">
+        <p class="panel-label">Prototype Focus</p>
+        <div class="metric-row">
+          <div>
+            <span class="metric-value">3</span>
+            <span class="metric-label">先行模擬站點</span>
+          </div>
+          <div>
+            <span class="metric-value">0</span>
+            <span class="metric-label">LOCAL UI 變更</span>
+          </div>
+        </div>
+        <div class="pulse-card">
+          <span class="pulse-dot"></span>
+          <div>
+            <strong>Safe sandbox mode</strong>
+            <p>先做視覺和流程驗證，之後再決定要不要串接真資料或真入口。</p>
+          </div>
+        </div>
+      </section>
+    </header>
+
+    <main>
+      <section class="status-strip">
+        <article>
+          <p class="strip-title">Current State</p>
+          <strong>現有 LOCAL UI 維持原樣</strong>
+          <span>prototype 只存在這個新資料夾</span>
+        </article>
+        <article>
+          <p class="strip-title">What We Test</p>
+          <strong>資訊分流 + 入口整合</strong>
+          <span>先驗證導覽方式與版面層級</span>
+        </article>
+        <article>
+          <p class="strip-title">Next Stage</p>
+          <strong>選一項接真資料</strong>
+          <span>確認方向後再局部串接</span>
+        </article>
+      </section>
+
+      <section class="section-heading" id="site-grid">
+        <p class="eyebrow">Preview Modules</p>
+        <h2>假設先從幾個既有項目切入</h2>
+        <p>
+          下面不是正式上線內容，而是示範如果未來把不同工具或頁面集中到一個入口，
+          會怎麼讓使用者快速知道用途、狀態和接下來可以做什麼。
+        </p>
+      </section>
+
+      <section class="site-grid">
+        <article class="site-card featured">
+          <div class="card-top">
+            <span class="tag amber">Keep As-Is</span>
+            <span class="mini-status">Protected</span>
+          </div>
+          <h3>LOCAL UI</h3>
+          <p class="card-copy">
+            現行使用中的本地介面。這裡只標示它的存在與重要性，不做任何畫面或流程上的改動。
+          </p>
+          <ul class="feature-list">
+            <li>保留原路徑與原操作</li>
+            <li>不覆蓋現有行為</li>
+            <li>新 prototype 與它分開驗證</li>
+          </ul>
+          <div class="card-footer">
+            <strong>No change planned in this phase</strong>
+          </div>
+        </article>
+
+        <article class="site-card">
+          <div class="card-top">
+            <span class="tag teal">Pilot 01</span>
+            <span class="mini-status">Mock Ready</span>
+          </div>
+          <h3>Dashboard Entry</h3>
+          <p class="card-copy">
+            把幾個常用頁面集中成一個入口，先處理「看得到全貌」和「知道該去哪裡」這件事。
+          </p>
+          <ul class="feature-list">
+            <li>站點卡片式導覽</li>
+            <li>用途摘要與狀態顯示</li>
+            <li>後續可接真網址或內部頁面</li>
+          </ul>
+          <div class="card-footer">
+            <button class="text-btn" type="button" data-highlight="dashboard">模擬查看</button>
+          </div>
+        </article>
+
+        <article class="site-card">
+          <div class="card-top">
+            <span class="tag coral">Pilot 02</span>
+            <span class="mini-status">Mock Ready</span>
+          </div>
+          <h3>Task Snapshot</h3>
+          <p class="card-copy">
+            用比較直覺的方式顯示目前有哪些工作、哪些需要注意，讓入口不只是連結列表。
+          </p>
+          <ul class="feature-list">
+            <li>優先順序卡片</li>
+            <li>待辦與提醒區塊</li>
+            <li>之後可接資料來源</li>
+          </ul>
+          <div class="card-footer">
+            <button class="text-btn" type="button" data-highlight="tasks">模擬查看</button>
+          </div>
+        </article>
+      </section>
+
+      <section class="detail-panel" id="detail-panel">
+        <div class="detail-copy">
+          <p class="eyebrow">Live Mock</p>
+          <h2 id="detail-title">Dashboard Entry</h2>
+          <p id="detail-text">
+            把常用功能整理成入口首頁，使用者一進來先看到最常進入的頁面、目前狀態與可執行動作。
+          </p>
+        </div>
+        <div class="detail-preview">
+          <div class="preview-window">
+            <div class="window-bar">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="preview-content" id="preview-content">
+              <div class="preview-column">
+                <p class="preview-label">Quick Access</p>
+                <strong>Shipment Overview</strong>
+                <strong>Weekly Summary</strong>
+                <strong>Alert Queue</strong>
+              </div>
+              <div class="preview-column accent">
+                <p class="preview-label">Today</p>
+                <strong>2 items need review</strong>
+                <span>1 high priority</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="connected-pilot" id="connected-pilot">
+        <div class="section-heading compact">
+          <p class="eyebrow">Connected Pilot</p>
+          <h2>先把 Monthly Shipment Analyze Local 接進來</h2>
+          <p>
+            這一段已經不是純示意，而是把
+            <code>C:\=Codex study==\20260430-Monthly Shipment Analyze Local</code>
+            的 sample workbook 分析結果接進來，讓你先看新入口承接真內容後會是什麼感覺。
+          </p>
+        </div>
+
+        <section class="source-banner">
+          <div>
+            <p class="strip-title">Connected Source</p>
+            <strong>Monthly Shipment Analyze Local</strong>
+            <span id="shipment-source-file"></span>
+          </div>
+          <div>
+            <p class="strip-title">Detected Period</p>
+            <strong id="shipment-period"></strong>
+            <span id="shipment-overall-trend"></span>
+          </div>
+          <div>
+            <p class="strip-title">Primary Brand</p>
+            <strong id="shipment-dominant-brand"></strong>
+            <span id="shipment-overall-total"></span>
+          </div>
+        </section>
+
+        <section class="shipment-grid">
+          <article class="shipment-panel shipment-summary-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Executive Summary</p>
+                <h3>整體摘要</h3>
+              </div>
+              <span class="summary-badge">Live sample</span>
+            </div>
+            <div class="summary-metrics" id="summary-metrics"></div>
+            <div class="mail-summary-box">
+              <p class="mail-summary-title">Mail-style lines</p>
+              <div id="mail-summary-lines"></div>
+            </div>
+          </article>
+
+          <article class="shipment-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Brand Split</p>
+                <h3>品牌拆分</h3>
+              </div>
+            </div>
+            <div class="brand-split-list" id="brand-split-list"></div>
+          </article>
+        </section>
+
+        <section class="shipment-grid lower">
+          <article class="shipment-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Brand Watch</p>
+                <h3>兩個主要品牌的當期重點</h3>
+              </div>
+            </div>
+            <div class="brand-watch-grid" id="brand-watch-grid"></div>
+          </article>
+
+          <article class="shipment-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Insight Pull</p>
+                <h3>從原分析頁先借三類資訊</h3>
+              </div>
+            </div>
+            <div class="insight-list" id="insight-list"></div>
+          </article>
+        </section>
+
+        <section class="shipment-grid visual-grid">
+          <article class="shipment-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Visual Status</p>
+                <h3>一眼看出本月是升還是降</h3>
+              </div>
+            </div>
+            <div class="mini-chart-card">
+              <div class="chart-header-line">
+                <strong>Recent 3-month total shipment</strong>
+                <span id="overall-chart-caption"></span>
+              </div>
+              <div class="bar-chart" id="overall-bar-chart"></div>
+            </div>
+          </article>
+
+          <article class="shipment-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Brand Compare</p>
+                <h3>品牌體感差異</h3>
+              </div>
+            </div>
+            <div class="compare-stack" id="brand-compare-stack"></div>
+          </article>
+        </section>
+
+        <section class="shipment-panel trend-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Trend Deck</p>
+              <h3>12-month trend 與主力機種</h3>
+            </div>
+          </div>
+          <div class="trend-deck-grid" id="trend-deck-grid"></div>
+        </section>
+
+        <section class="shipment-grid visual-grid">
+          <article class="shipment-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Territory Mix</p>
+                <h3>ASUS Territory 視覺化</h3>
+              </div>
+            </div>
+            <div class="territory-hero" id="territory-hero"></div>
+            <div class="territory-stack" id="territory-stack"></div>
+          </article>
+
+          <article class="shipment-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Customer View</p>
+                <h3>Customer 變化圖像化</h3>
+              </div>
+            </div>
+            <div class="customer-visual-stack" id="customer-visual-stack"></div>
+          </article>
+        </section>
+
+        <section class="shipment-panel customer-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Customer Snapshot</p>
+              <h3>最近三個月 customer shipment</h3>
+            </div>
+          </div>
+          <div class="customer-table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>M-2</th>
+                  <th>M-1</th>
+                  <th>M</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody id="customer-shipment-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="roadmap" id="roadmap">
+        <div class="section-heading compact">
+          <p class="eyebrow">Suggested Path</p>
+          <h2>如果這個方向可以，下一步就很單純</h2>
+        </div>
+        <div class="roadmap-steps">
+          <article>
+            <span>01</span>
+            <h3>先看版型是否順眼</h3>
+            <p>確認這種入口式做法是不是你想要的方向。</p>
+          </article>
+          <article>
+            <span>02</span>
+            <h3>選一個 pilot 接真內容</h3>
+            <p>例如只先把某一個既有站點資訊接進來。</p>
+          </article>
+          <article>
+            <span>03</span>
+            <h3>最後才考慮 LOCAL UI 串接</h3>
+            <p>等獨立版本驗證過，再決定要不要整合，不會一開始就動到正式介面。</p>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
