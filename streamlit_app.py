@@ -55,7 +55,10 @@ def password_gate() -> bool:
     return True
 
   st.markdown("### CFR Watch Board Login")
-  st.caption("Enter the shared pilot credentials to continue.")
+  if expected_username:
+    st.info(f"使用說明：帳號請輸入 `{expected_username}`；密碼請向管理者索取。")
+  else:
+    st.info("使用說明：請輸入管理者提供的共用密碼。")
   with st.form("login_form"):
     username = st.text_input("Account", value="", disabled=not bool(expected_username))
     password = st.text_input("Password", type="password")
