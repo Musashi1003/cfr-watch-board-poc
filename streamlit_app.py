@@ -384,12 +384,17 @@ def metric_row(result: dict):
 
 def bar_chart(frame: pd.DataFrame, x_column: str, y_column: str, height: int = 260):
   axis_values = nice_axis_values(frame[y_column].max() if not frame.empty else 0)
+  axis_domain = [0, axis_values[-1]]
   chart = (
     alt.Chart(frame)
     .mark_bar(color=BAR_COLOR, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
     .encode(
       y=alt.Y(f"{x_column}:N", sort="-x", axis=alt.Axis(title=None, labelLimit=180)),
-      x=alt.X(f"{y_column}:Q", axis=alt.Axis(title=None, values=axis_values)),
+      x=alt.X(
+        f"{y_column}:Q",
+        scale=alt.Scale(domain=axis_domain),
+        axis=alt.Axis(title=None, values=axis_values),
+      ),
       tooltip=[
         alt.Tooltip(f"{x_column}:N", title="Item"),
         alt.Tooltip(f"{y_column}:Q", title="Count"),
@@ -420,13 +425,18 @@ def render_pareto_frame(title: str, rows: list[dict], empty_message: str):
     st.info(empty_message)
     return
   count_axis_values = nice_axis_values(pareto["count"].max())
+  count_axis_domain = [0, count_axis_values[-1]]
 
   bars = (
     alt.Chart(pareto)
     .mark_bar(color=BAR_LIGHT_COLOR, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
     .encode(
       x=alt.X("short_label:N", sort=None, axis=alt.Axis(title=None, labelAngle=-35, labelLimit=90)),
-      y=alt.Y("count:Q", axis=alt.Axis(title=None, values=count_axis_values, grid=True)),
+      y=alt.Y(
+        "count:Q",
+        scale=alt.Scale(domain=count_axis_domain),
+        axis=alt.Axis(title=None, values=count_axis_values, grid=True),
+      ),
       tooltip=[
         alt.Tooltip("label:N", title="Item"),
         alt.Tooltip("count:Q", title="Failure Qty"),
@@ -443,7 +453,13 @@ def render_pareto_frame(title: str, rows: list[dict], empty_message: str):
       y=alt.Y(
         "cumulative:Q",
         scale=alt.Scale(domain=[0, 100]),
-        axis=alt.Axis(title=None, orient="right", values=[0, 50, 100], grid=False),
+        axis=alt.Axis(
+          title=None,
+          orient="right",
+          values=[0, 50, 100],
+          labelExpr="datum.value + '%'",
+          grid=False,
+        ),
       ),
     )
   )
@@ -500,12 +516,17 @@ def render_trend(result: dict):
     st.info("No trend data in the current filter.")
     return
   axis_values = nice_axis_values(trend["count"].max())
+  axis_domain = [0, axis_values[-1]]
   chart = (
     alt.Chart(trend)
     .mark_line(point=True, color="#138a8e", strokeWidth=2.5)
     .encode(
       x=alt.X("week:N", axis=alt.Axis(labelAngle=-45, title=None)),
-      y=alt.Y("count:Q", axis=alt.Axis(title=None, values=axis_values)),
+      y=alt.Y(
+        "count:Q",
+        scale=alt.Scale(domain=axis_domain),
+        axis=alt.Axis(title=None, values=axis_values),
+      ),
       tooltip=[
         alt.Tooltip("week:N", title="Week"),
         alt.Tooltip("count:Q", title="Failure Qty"),
