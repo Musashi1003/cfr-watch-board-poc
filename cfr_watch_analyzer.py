@@ -353,6 +353,25 @@ def _apply_filters(records: list[dict], filters: dict) -> list[dict]:
   return filtered
 
 
+def _summary_key_for_model(model: str, summary_by_model: dict[str, dict]) -> str | None:
+  if model in summary_by_model:
+    return model
+
+  model_key = _normalized_header(model)
+  if not model_key:
+    return None
+
+  prefix_matches = [
+    summary_model
+    for summary_model in summary_by_model
+    if len(_normalized_header(summary_model)) >= 4
+    and model_key.startswith(_normalized_header(summary_model))
+  ]
+  if not prefix_matches:
+    return None
+  return max(prefix_matches, key=lambda summary_model: len(_normalized_header(summary_model)))
+
+
 def _counter_rows(counter: Counter, limit: int | None = None) -> list[dict]:
   total = sum(counter.values()) or 1
   rows = []
@@ -402,10 +421,16 @@ def analyze_dataset(
     for record in filtered_records
     if record.get("ORG_MODEL(PRODUCT_DESC)", "")
   }
-  act_rows = [
-    summary_by_model[model]
+  matched_summary_keys = {
+    summary_key
     for model in filtered_models
-    if model in summary_by_model and summary_by_model[model].get("derived_act")
+    for summary_key in [_summary_key_for_model(model, summary_by_model)]
+    if summary_key
+  }
+  act_rows = [
+    summary_by_model[summary_key]
+    for summary_key in matched_summary_keys
+    if summary_by_model[summary_key].get("derived_act")
   ]
   derived_act = sum(row["derived_act"] for row in act_rows)
   filtered_failure_qty = len(filtered_records)
@@ -445,8 +470,9 @@ def analyze_dataset(
   for primary_label in top_primary_labels:
     primary_act = None
     if primary_column == "ORG_MODEL(PRODUCT_DESC)":
-      primary_summary = summary_by_model.get(primary_label)
-      if primary_summary:
+      primary_summary_key = _summary_key_for_model(primary_label, summary_by_model)
+      if primary_summary_key:
+        primary_summary = summary_by_model.get(primary_summary_key)
         primary_act = primary_summary.get("derived_act")
 
     values = []
