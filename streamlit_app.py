@@ -286,18 +286,27 @@ def dashboard_header(result: dict):
 def write_uploads_to_temp_files(uploaded_files) -> tuple[list[WorkbookUpload], list[Path]]:
   workbooks: list[WorkbookUpload] = []
   temp_paths: list[Path] = []
-  for uploaded_file in uploaded_files:
-    suffix = Path(uploaded_file.name).suffix
+  for filename, file_bytes in uploaded_files:
+    suffix = Path(filename).suffix
     with NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-      temp_file.write(uploaded_file.getbuffer())
+      temp_file.write(file_bytes)
       temp_path = Path(temp_file.name)
     temp_paths.append(temp_path)
-    workbooks.append(WorkbookUpload(path=temp_path, filename=uploaded_file.name))
+    workbooks.append(WorkbookUpload(path=temp_path, filename=filename))
   return workbooks, temp_paths
 
 
-def parse_uploaded_files(uploaded_files) -> dict:
-  workbooks, temp_paths = write_uploads_to_temp_files(uploaded_files)
+def build_upload_payloads(uploaded_files) -> tuple[tuple[str, bytes], ...]:
+  return tuple((uploaded_file.name, uploaded_file.getvalue()) for uploaded_file in uploaded_files)
+
+
+def uploaded_size_mb(upload_payloads: tuple[tuple[str, bytes], ...]) -> float:
+  return sum(len(file_bytes) for _, file_bytes in upload_payloads) / (1024 * 1024)
+
+
+@st.cache_data(show_spinner=False, ttl=3600, max_entries=8)
+def parse_uploaded_payloads(upload_payloads: tuple[tuple[str, bytes], ...]) -> dict:
+  workbooks, temp_paths = write_uploads_to_temp_files(upload_payloads)
   try:
     return parse_workbooks(workbooks)
   finally:
@@ -686,8 +695,16 @@ def main():
     st.info("Upload weekly CFR raw-data workbooks to start.")
     return
 
+  upload_payloads = build_upload_payloads(uploaded_files)
+  total_upload_mb = uploaded_size_mb(upload_payloads)
+  if total_upload_mb > 80:
+    st.warning(
+      f"Uploaded files total {total_upload_mb:.1f} MB. Large Excel workbooks may take longer on Streamlit Community Cloud."
+    )
+
   try:
-    parsed = parse_uploaded_files(uploaded_files)
+    with st.spinner("Reading weekly CFR workbooks..."):
+      parsed = parse_uploaded_payloads(upload_payloads)
   except Exception as exc:
     st.error(f"CFR analysis failed: {exc}")
     return
