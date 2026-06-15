@@ -32,6 +32,23 @@ RAW_SHEET_NAME = "raw data"
 SUMMARY_SHEET_NAME = "SUMMARY_IEC"
 MAX_CONSECUTIVE_EMPTY_ROWS = 200
 
+COLUMN_ALIASES = {
+  "RMA_NO": ("RMA_NO", "RMA NO", "RMA_NUMBER", "RMA NUMBER"),
+  "Week": ("Week", "WK", "WEEK_NO", "WEEK NO"),
+  "ORG_MODEL(PRODUCT_DESC)": (
+    "ORG_MODEL(PRODUCT_DESC)",
+    "ORG MODEL(PRODUCT DESC)",
+    "ORG_MODEL",
+    "MODEL",
+    "PRODUCT_DESC",
+    "PRODUCT DESC",
+  ),
+  "Segment": ("Segment", "SEGMENT"),
+  "ODM_OEM": ("ODM_OEM", "ODM/OEM", "ODM OEM"),
+  "MUC_MODULE": ("MUC_MODULE", "MUC MODULE", "MODULE"),
+  "PROBLEM_Mapping": ("PROBLEM_Mapping", "PROBLEM Mapping", "Problem Mapping", "PROBLEM_MAPPING"),
+}
+
 
 @dataclass(frozen=True)
 class WorkbookUpload:
@@ -44,6 +61,35 @@ def _clean(value) -> str:
     return ""
   text = str(value).replace("\xa0", " ").strip()
   return re.sub(r"\s+", " ", text)
+
+
+def _normalized_header(value) -> str:
+  return re.sub(r"[^A-Z0-9]", "", _clean(value).upper())
+
+
+def _sheet_name(workbook, expected_name: str) -> str | None:
+  expected_key = _normalized_header(expected_name)
+  for sheet_name in workbook.sheetnames:
+    if _normalized_header(sheet_name) == expected_key:
+      return sheet_name
+  return None
+
+
+def _header_index(headers: list[str], candidates: Iterable[str]) -> int | None:
+  normalized_candidates = {_normalized_header(candidate) for candidate in candidates}
+  for index, header in enumerate(headers):
+    if _normalized_header(header) in normalized_candidates:
+      return index
+  return None
+
+
+def _header_index_by_pattern(headers: list[str], patterns: Iterable[str]) -> int | None:
+  for index, header in enumerate(headers):
+    clean_header = _clean(header)
+    for pattern in patterns:
+      if re.search(pattern, clean_header, flags=re.IGNORECASE):
+        return index
+  return None
 
 
 def _detect_source_type(filename: str) -> str:
@@ -93,17 +139,29 @@ def _percent_decimal(value) -> float | None:
 
 
 def _parse_summary_iec(workbook, filename: str) -> dict[str, dict]:
-  if SUMMARY_SHEET_NAME not in workbook.sheetnames:
+  summary_sheet_name = _sheet_name(workbook, SUMMARY_SHEET_NAME)
+  if not summary_sheet_name:
     return {}
 
-  worksheet = workbook[SUMMARY_SHEET_NAME]
+  worksheet = workbook[summary_sheet_name]
   header_row = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True))
   headers = [_clean(value) for value in header_row]
-  index_by_header = {header: index for index, header in enumerate(headers) if header}
-  model_index = index_by_header.get("MODEL")
-  failure_index = index_by_header.get("IW Failure Q'ty")
-  cfr_index = index_by_header.get("2026 CFR(A) for model")
-  target_index = index_by_header.get("2026 Target")
+  model_index = _header_index(headers, ("MODEL", "Model"))
+  failure_index = _header_index(headers, ("IW Failure Q'ty", "IW Failure Qty", "IW Failure Quantity"))
+  cfr_index = _header_index_by_pattern(
+    headers,
+    (
+      r"^20\d{2}\s+CFR\(A\)\s+for\s+model$",
+      r"CFR\(A\).*for\s+model",
+    ),
+  )
+  target_index = _header_index_by_pattern(
+    headers,
+    (
+      r"^20\d{2}\s+Target$",
+      r"\bTarget\b",
+    ),
+  )
 
   if model_index is None or failure_index is None or cfr_index is None:
     return {}
@@ -163,7 +221,8 @@ def parse_workbooks(workbooks: Iterable[WorkbookUpload]) -> dict:
           continue
         summary_by_model[model] = summary
 
-      if RAW_SHEET_NAME not in workbook.sheetnames:
+      raw_sheet_name = _sheet_name(workbook, RAW_SHEET_NAME)
+      if not raw_sheet_name:
         missing_columns_by_file[upload.filename] = [RAW_SHEET_NAME]
         file_summaries.append(
           {
@@ -175,7 +234,7 @@ def parse_workbooks(workbooks: Iterable[WorkbookUpload]) -> dict:
         )
         continue
 
-      worksheet = workbook[RAW_SHEET_NAME]
+      worksheet = workbook[raw_sheet_name]
       header_row = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
       if not header_row:
         missing_columns_by_file[upload.filename] = ["raw data header row"]
@@ -189,10 +248,17 @@ def parse_workbooks(workbooks: Iterable[WorkbookUpload]) -> dict:
         )
         continue
       headers = [_clean(value) for value in header_row]
-      index_by_header = {header: index for index, header in enumerate(headers) if header}
-      missing = sorted(required_columns - set(index_by_header))
+      index_by_required_field = {
+        field_name: _header_index(headers, COLUMN_ALIASES.get(field_name, (field_name,)))
+        for field_name in required_columns
+      }
+      missing = sorted(field_name for field_name, index in index_by_required_field.items() if index is None)
       if missing:
         missing_columns_by_file[upload.filename] = missing
+      optional_indices = {
+        optional_field: _header_index(headers, (optional_field,))
+        for optional_field in ("REGION", "COUNTRY", "PRODUCT_LINE", "CUSTOMER_NAME", "REPAIR_LEVEL")
+      }
 
       row_count = 0
       consecutive_empty_rows = 0
@@ -212,11 +278,10 @@ def parse_workbooks(workbooks: Iterable[WorkbookUpload]) -> dict:
           "source_type": _detect_source_type(upload.filename),
         }
         for field_name in required_columns:
-          index = index_by_header.get(field_name)
+          index = index_by_required_field.get(field_name)
           record[field_name] = _clean(row[index]) if index is not None and index < len(row) else ""
 
-        for optional_field in ("REGION", "COUNTRY", "PRODUCT_LINE", "CUSTOMER_NAME", "REPAIR_LEVEL"):
-          index = index_by_header.get(optional_field)
+        for optional_field, index in optional_indices.items():
           record[optional_field] = _clean(row[index]) if index is not None and index < len(row) else ""
 
         records.append(record)
