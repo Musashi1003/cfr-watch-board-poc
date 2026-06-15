@@ -304,6 +304,12 @@ def uploaded_size_mb(upload_payloads: tuple[tuple[str, bytes], ...]) -> float:
   return sum(len(file_bytes) for _, file_bytes in upload_payloads) / (1024 * 1024)
 
 
+def upload_summary_text(upload_payloads: tuple[tuple[str, bytes], ...]) -> str:
+  total_mb = uploaded_size_mb(upload_payloads)
+  file_count = len(upload_payloads)
+  return f"Received {file_count} workbook{'s' if file_count != 1 else ''}, total {total_mb:.1f} MB."
+
+
 @st.cache_data(show_spinner=False, ttl=3600, max_entries=8)
 def parse_uploaded_payloads(upload_payloads: tuple[tuple[str, bytes], ...]) -> dict:
   workbooks, temp_paths = write_uploads_to_temp_files(upload_payloads)
@@ -668,6 +674,23 @@ def render_file_summary(parsed: dict):
       )
 
 
+def render_parse_diagnostics(parsed: dict):
+  missing_columns = parsed.get("missing_columns", {})
+  files = parsed.get("files", [])
+  if files:
+    with st.expander("Workbook parsing details", expanded=True):
+      for file_info in files:
+        st.markdown(
+          f"- **{file_info['filename']}**: {file_info['rows']} raw-data rows, "
+          f"{len(file_info.get('sheets', []))} sheets"
+        )
+  if missing_columns:
+    st.error("Some uploaded workbooks are missing the required sheet or columns.")
+    with st.expander("Missing sheet / column details", expanded=True):
+      for filename, columns in missing_columns.items():
+        st.markdown(f"- `{filename}`: {', '.join(columns)}")
+
+
 def main():
   apply_page_style()
   st.markdown('<div class="cfr-title">CFR Watch Board</div>', unsafe_allow_html=True)
@@ -697,6 +720,10 @@ def main():
 
   upload_payloads = build_upload_payloads(uploaded_files)
   total_upload_mb = uploaded_size_mb(upload_payloads)
+  parse_notice = st.empty()
+  parse_notice.info(f"{upload_summary_text(upload_payloads)} Reading the Excel raw data now.")
+  filter_wait_notice = st.sidebar.empty()
+  filter_wait_notice.info("Filters will appear after the uploaded workbook is parsed.")
   if total_upload_mb > 80:
     st.warning(
       f"Uploaded files total {total_upload_mb:.1f} MB. Large Excel workbooks may take longer on Streamlit Community Cloud."
@@ -709,9 +736,12 @@ def main():
     st.error(f"CFR analysis failed: {exc}")
     return
 
+  parse_notice.empty()
+  filter_wait_notice.empty()
   records = parsed.get("records", [])
   if not records:
     st.warning("No raw-data records were found. Please confirm the workbook includes a 'raw data' sheet.")
+    render_parse_diagnostics(parsed)
     return
 
   render_file_summary(parsed)

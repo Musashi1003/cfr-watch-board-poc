@@ -30,6 +30,7 @@ FILTER_FIELDS = {
 
 RAW_SHEET_NAME = "raw data"
 SUMMARY_SHEET_NAME = "SUMMARY_IEC"
+MAX_CONSECUTIVE_EMPTY_ROWS = 200
 
 
 @dataclass(frozen=True)
@@ -164,10 +165,29 @@ def parse_workbooks(workbooks: Iterable[WorkbookUpload]) -> dict:
 
       if RAW_SHEET_NAME not in workbook.sheetnames:
         missing_columns_by_file[upload.filename] = [RAW_SHEET_NAME]
+        file_summaries.append(
+          {
+            "filename": upload.filename,
+            "source_type": _detect_source_type(upload.filename),
+            "rows": 0,
+            "sheets": workbook.sheetnames,
+          }
+        )
         continue
 
       worksheet = workbook[RAW_SHEET_NAME]
-      header_row = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True))
+      header_row = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
+      if not header_row:
+        missing_columns_by_file[upload.filename] = ["raw data header row"]
+        file_summaries.append(
+          {
+            "filename": upload.filename,
+            "source_type": _detect_source_type(upload.filename),
+            "rows": 0,
+            "sheets": workbook.sheetnames,
+          }
+        )
+        continue
       headers = [_clean(value) for value in header_row]
       index_by_header = {header: index for index, header in enumerate(headers) if header}
       missing = sorted(required_columns - set(index_by_header))
@@ -175,10 +195,18 @@ def parse_workbooks(workbooks: Iterable[WorkbookUpload]) -> dict:
         missing_columns_by_file[upload.filename] = missing
 
       row_count = 0
+      consecutive_empty_rows = 0
+      data_started = False
       for row in worksheet.iter_rows(min_row=2, values_only=True):
         if not any(row):
+          if data_started:
+            consecutive_empty_rows += 1
+            if consecutive_empty_rows >= MAX_CONSECUTIVE_EMPTY_ROWS:
+              break
           continue
 
+        data_started = True
+        consecutive_empty_rows = 0
         record = {
           "source_file": upload.filename,
           "source_type": _detect_source_type(upload.filename),
