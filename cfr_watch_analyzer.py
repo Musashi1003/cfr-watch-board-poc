@@ -419,7 +419,11 @@ def analyze_dataset(
   primary_counter = Counter(record.get(primary_column, "") or "(blank)" for record in filtered_records)
   breakdown_counter = Counter(record.get(breakdown_column, "") or "(blank)" for record in filtered_records)
   module_counter = Counter(record.get("MUC_MODULE", "") or "(blank)" for record in filtered_records)
-  action_counter = Counter(record.get(ACTION_FIELD, "") or "(blank)" for record in filtered_records)
+  action_counter = Counter(
+    _clean(record.get(ACTION_FIELD, ""))
+    for record in filtered_records
+    if _clean(record.get(ACTION_FIELD, ""))
+  )
   source_counter = Counter(record.get("source_type", "") or "Uploaded" for record in filtered_records)
   filtered_models = {
     record.get("ORG_MODEL(PRODUCT_DESC)", "")
@@ -469,7 +473,7 @@ def analyze_dataset(
     action_records = [
       record
       for record in filtered_records
-      if (record.get(ACTION_FIELD, "") or "(blank)") == label
+      if _clean(record.get(ACTION_FIELD, "")) == label
     ]
     model_label = Counter(record.get("ORG_MODEL(PRODUCT_DESC)", "") or "(blank)" for record in action_records).most_common(1)
     problem_label = Counter(record.get("PROBLEM_Mapping", "") or "(blank)" for record in action_records).most_common(1)
@@ -480,7 +484,7 @@ def analyze_dataset(
     )
     action_rows.append(
       {
-        "label": label or "(blank)",
+        "label": label,
         "count": count,
         "share": count / total_actions * 100,
         "cumulative": cumulative / total_actions * 100,

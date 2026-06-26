@@ -41,6 +41,7 @@ LINE_COLOR = "#075f73"
 ACCENT_GREEN = "#12805c"
 ACCENT_RED = "#d83b35"
 TEXT_DARK = "#071316"
+PARSE_CACHE_VERSION = "2026-06-26-action-desc-v2"
 
 
 def html_escape(value) -> str:
@@ -384,7 +385,8 @@ def upload_summary_text(upload_payloads: tuple[tuple[str, bytes], ...]) -> str:
 
 
 @st.cache_data(show_spinner=False, ttl=3600, max_entries=8)
-def parse_uploaded_payloads(upload_payloads: tuple[tuple[str, bytes], ...]) -> dict:
+def parse_uploaded_payloads(upload_payloads: tuple[tuple[str, bytes], ...], parser_version: str) -> dict:
+  _ = parser_version
   workbooks, temp_paths = write_uploads_to_temp_files(upload_payloads)
   try:
     return parse_workbooks(workbooks)
@@ -884,7 +886,7 @@ def main():
 
   try:
     with st.spinner("Reading weekly CFR workbooks..."):
-      parsed = parse_uploaded_payloads(upload_payloads)
+      parsed = parse_uploaded_payloads(upload_payloads, PARSE_CACHE_VERSION)
   except Exception as exc:
     st.error(f"CFR analysis failed: {exc}")
     return
