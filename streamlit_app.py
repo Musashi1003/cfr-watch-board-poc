@@ -4,6 +4,7 @@ import hmac
 import math
 import os
 from datetime import datetime
+from html import escape
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -40,6 +41,10 @@ LINE_COLOR = "#075f73"
 ACCENT_GREEN = "#12805c"
 ACCENT_RED = "#d83b35"
 TEXT_DARK = "#071316"
+
+
+def html_escape(value) -> str:
+  return escape(str(value), quote=True)
 
 
 def read_secret(name: str) -> str:
@@ -199,6 +204,74 @@ def apply_page_style():
       div[data-testid="stDataFrame"] {
         border: 1px solid #e5e0d8;
         border-radius: 8px;
+      }
+      .action-card {
+        background: linear-gradient(135deg, #ffffff 0%, #f9fffd 100%);
+        border: 1px solid #e5e0d8;
+        border-top: 4px solid #1a9295;
+        border-radius: 8px;
+        padding: 1rem 1.1rem;
+        min-height: 152px;
+        box-shadow: 0 10px 24px rgba(16, 35, 42, 0.06);
+      }
+      .action-label {
+        color: #4d6568;
+        font-size: 0.78rem;
+        font-weight: 750;
+        letter-spacing: 0.04em;
+        margin-bottom: 0.45rem;
+      }
+      .action-title {
+        color: #071316;
+        font-size: 1rem;
+        font-weight: 800;
+        line-height: 1.25;
+        overflow-wrap: anywhere;
+        min-height: 2.5rem;
+      }
+      .action-number {
+        display: flex;
+        align-items: baseline;
+        gap: 0.55rem;
+        margin-top: 0.85rem;
+      }
+      .action-number strong {
+        color: #071316;
+        font-size: 1.75rem;
+        line-height: 1;
+      }
+      .action-number span {
+        color: #607478;
+        font-size: 0.86rem;
+      }
+      .action-note {
+        color: #607478;
+        font-size: 0.8rem;
+        margin-top: 0.65rem;
+        overflow-wrap: anywhere;
+      }
+      .change-log {
+        background: #ffffff;
+        border: 1px solid #e5e0d8;
+        border-radius: 8px;
+        padding: 1rem 1.15rem;
+        box-shadow: 0 10px 24px rgba(16, 35, 42, 0.06);
+      }
+      .change-log h3 {
+        margin: 0 0 0.7rem 0;
+        font-size: 1.08rem;
+      }
+      .change-log ol {
+        margin: 0;
+        padding-left: 1.2rem;
+      }
+      .change-log li {
+        color: #5f6f72;
+        font-size: 0.88rem;
+        line-height: 1.7;
+      }
+      .change-log strong {
+        color: #122426;
       }
     </style>
     """,
@@ -559,6 +632,67 @@ def render_pareto(result: dict):
   )
 
 
+def render_action_insight(result: dict):
+  rows = result.get("action_desc", [])
+  st.subheader("ACTION_DESC Result")
+  st.caption("Based on the current filter selections. ACTION_DESC is shown as a result insight, not as another filter.")
+
+  if not rows:
+    st.info("No ACTION_DESC data in the current filter.")
+    return
+
+  top_rows = rows[:3]
+  card_columns = st.columns(3)
+  for column, row in zip(card_columns, top_rows):
+    column.markdown(
+      f"""
+      <div class="action-card">
+        <div class="action-label">ACTION_DESC</div>
+        <div class="action-title">{html_escape(row["label"])}</div>
+        <div class="action-number">
+          <strong>{whole(row["count"])}</strong>
+          <span>{row["share"]:.1f}%</span>
+        </div>
+        <div class="action-note">Top Problem: {html_escape(row.get("top_problem", "N/A"))}</div>
+      </div>
+      """,
+      unsafe_allow_html=True,
+    )
+
+  left, right = st.columns([1.05, 1])
+  with left:
+    render_pareto_frame(
+      "ACTION_DESC Pareto",
+      rows,
+      "No ACTION_DESC data in the current filter.",
+    )
+  with right:
+    detail = pd.DataFrame(rows).head(10)
+    if detail.empty:
+      st.info("No ACTION_DESC detail data in the current filter.")
+      return
+    detail = detail.rename(
+      columns={
+        "label": "action_desc",
+        "count": "failure_qty",
+        "share": "share",
+        "cumulative": "cumulative",
+        "top_model": "top_model",
+        "top_problem": "top_problem",
+        "latest_week_count": "latest_week",
+      }
+    )
+    detail.insert(0, "rank", range(1, len(detail) + 1))
+    detail["share"] = detail["share"].map(lambda value: f"{value:.1f}%")
+    detail["cumulative"] = detail["cumulative"].map(lambda value: f"{value:.1f}%")
+    st.subheader("ACTION_DESC Detail")
+    st.dataframe(
+      detail[["rank", "action_desc", "failure_qty", "share", "cumulative", "top_model", "top_problem", "latest_week"]],
+      width="stretch",
+      hide_index=True,
+    )
+
+
 def render_module_pareto(result: dict):
   render_pareto_frame(
     "MUC_MODULE Pareto",
@@ -691,6 +825,23 @@ def render_parse_diagnostics(parsed: dict):
         st.markdown(f"- `{filename}`: {', '.join(columns)}")
 
 
+def render_change_log():
+  st.markdown(
+    """
+    <div class="change-log">
+      <h3>Site Change Log</h3>
+      <ol>
+        <li><strong>2026-06-11</strong> CFR Watch Board 初次上板：上傳 Gaming / PC NB raw data，建立 KPI、Trend、Pareto、Heatmap 與 Top items。</li>
+        <li><strong>2026-06-12</strong> Streamlit POC 與視覺優化：調整 filter、Pareto、Heatmap 顏色與圖表標籤。</li>
+        <li><strong>2026-06-15</strong> 資料解析強化：改善 upload feedback、支援 2025 CFR workbook、ACT summary model prefix match。</li>
+        <li><strong>2026-06-26</strong> 新增 ACTION_DESC 結果洞察：Top cards、Pareto 與明細表，跟現有篩選器連動。</li>
+      </ol>
+    </div>
+    """,
+    unsafe_allow_html=True,
+  )
+
+
 def main():
   apply_page_style()
   st.markdown('<div class="cfr-title">CFR Watch Board</div>', unsafe_allow_html=True)
@@ -716,6 +867,8 @@ def main():
 
   if not uploaded_files:
     st.info("Upload weekly CFR raw-data workbooks to start.")
+    st.divider()
+    render_change_log()
     return
 
   upload_payloads = build_upload_payloads(uploaded_files)
@@ -771,6 +924,12 @@ def main():
     render_pareto(result)
   with right:
     render_heatmap(result)
+
+  st.divider()
+  render_action_insight(result)
+
+  st.divider()
+  render_change_log()
 
 
 if __name__ == "__main__":

@@ -20,6 +20,8 @@ BREAKDOWN_DIMENSIONS = {
   "problem_mapping": "PROBLEM_Mapping",
 }
 
+ACTION_FIELD = "ACTION_DESC"
+
 FILTER_FIELDS = {
   "model": "ORG_MODEL(PRODUCT_DESC)",
   "segment": "Segment",
@@ -47,6 +49,7 @@ COLUMN_ALIASES = {
   "ODM_OEM": ("ODM_OEM", "ODM/OEM", "ODM OEM"),
   "MUC_MODULE": ("MUC_MODULE", "MUC MODULE", "MODULE"),
   "PROBLEM_Mapping": ("PROBLEM_Mapping", "PROBLEM Mapping", "Problem Mapping", "PROBLEM_MAPPING"),
+  ACTION_FIELD: ("ACTION_DESC", "ACTION DESC", "ACTION_DESCRIPTION", "ACTION DESCRIPTION"),
 }
 
 
@@ -203,6 +206,7 @@ def parse_workbooks(workbooks: Iterable[WorkbookUpload]) -> dict:
     "Week",
     *PRIMARY_DIMENSIONS.values(),
     *BREAKDOWN_DIMENSIONS.values(),
+    ACTION_FIELD,
   }
 
   for upload in workbooks:
@@ -415,6 +419,7 @@ def analyze_dataset(
   primary_counter = Counter(record.get(primary_column, "") or "(blank)" for record in filtered_records)
   breakdown_counter = Counter(record.get(breakdown_column, "") or "(blank)" for record in filtered_records)
   module_counter = Counter(record.get("MUC_MODULE", "") or "(blank)" for record in filtered_records)
+  action_counter = Counter(record.get(ACTION_FIELD, "") or "(blank)" for record in filtered_records)
   source_counter = Counter(record.get("source_type", "") or "Uploaded" for record in filtered_records)
   filtered_models = {
     record.get("ORG_MODEL(PRODUCT_DESC)", "")
@@ -453,6 +458,35 @@ def analyze_dataset(
         "count": count,
         "share": count / total_breakdown * 100,
         "cumulative": cumulative / total_breakdown * 100,
+      }
+    )
+
+  cumulative = 0
+  total_actions = sum(action_counter.values()) or 1
+  action_rows = []
+  for label, count in action_counter.most_common(15):
+    cumulative += count
+    action_records = [
+      record
+      for record in filtered_records
+      if (record.get(ACTION_FIELD, "") or "(blank)") == label
+    ]
+    model_label = Counter(record.get("ORG_MODEL(PRODUCT_DESC)", "") or "(blank)" for record in action_records).most_common(1)
+    problem_label = Counter(record.get("PROBLEM_Mapping", "") or "(blank)" for record in action_records).most_common(1)
+    latest_action_count = (
+      sum(1 for record in action_records if (record.get("Week", "") or "(blank)") == latest_week)
+      if latest_week
+      else 0
+    )
+    action_rows.append(
+      {
+        "label": label or "(blank)",
+        "count": count,
+        "share": count / total_actions * 100,
+        "cumulative": cumulative / total_actions * 100,
+        "top_model": model_label[0][0] if model_label else "N/A",
+        "top_problem": problem_label[0][0] if problem_label else "N/A",
+        "latest_week_count": latest_action_count,
       }
     )
 
@@ -538,6 +572,7 @@ def analyze_dataset(
     "share": _counter_rows(primary_counter, 12),
     "module_ratio": _counter_rows(module_counter, 12),
     "pareto": pareto_rows,
+    "action_desc": action_rows,
     "heatmap_columns": top_breakdown_labels,
     "heatmap": heatmap,
     "top_combinations": top_combinations,
