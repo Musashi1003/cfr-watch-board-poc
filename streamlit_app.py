@@ -35,6 +35,14 @@ FILTER_LABELS = {
   "problem_mapping": "Problem",
 }
 
+FILTER_ORDER = (
+  "segment",
+  "model",
+  "odm_oem",
+  "muc_module",
+  "problem_mapping",
+)
+
 BAR_COLOR = "#1a9295"
 BAR_LIGHT_COLOR = "#8fd6d5"
 LINE_COLOR = "#075f73"
@@ -399,17 +407,26 @@ def parse_uploaded_payloads(upload_payloads: tuple[tuple[str, bytes], ...], pars
 
 
 def selected_filters(records: list[dict]) -> dict[str, list[str]]:
+  current_selections = {
+    key: [
+      str(value).strip()
+      for value in st.session_state.get(f"filter_{key}", [])
+      if str(value).strip()
+    ]
+    for key in FILTER_FIELDS
+  }
+  options_by_filter = dataset_options(records, current_selections)
   selections: dict[str, list[str]] = {}
   with st.sidebar:
     st.header("Filters")
     st.caption("Leave a filter empty to include all values.")
-    for key in FILTER_FIELDS:
-      options = dataset_options(records, selections).get(key, [])
+    for key in FILTER_ORDER:
+      options = options_by_filter.get(key, [])
       with st.expander(FILTER_LABELS[key], expanded=False):
         selections[key] = st.multiselect(
           "Select values",
           options,
-          default=[],
+          default=current_selections.get(key, []),
           key=f"filter_{key}",
           label_visibility="collapsed",
         )
