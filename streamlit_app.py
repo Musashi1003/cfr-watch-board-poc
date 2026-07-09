@@ -755,7 +755,7 @@ def activation_for_model_week(
 
 
 def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]):
-  st.subheader("Continuous Interval CFR Trend")
+  st.subheader("Cumulative CFR Trend")
   store = activation_history_store()
   if not store:
     st.info("No activation history is available yet.")
@@ -796,8 +796,8 @@ def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]
     },
     key=week_sort_key,
   )
-  if len(available_weeks) < 2:
-    st.info("At least two activation weeks are needed for the current filter selection.")
+  if not available_weeks:
+    st.info("No activation weeks are available for the current filter selection.")
     return
 
   cumulative_activation_by_week = {}
@@ -810,30 +810,25 @@ def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]
     cumulative_activation_by_week[week] = sum(valid_values) if valid_values else None
 
   trend_rows = []
-  for previous_week, current_week in zip(available_weeks, available_weeks[1:]):
-    previous_activation = cumulative_activation_by_week.get(previous_week)
-    current_activation = cumulative_activation_by_week.get(current_week)
-    if previous_activation is None or current_activation is None:
-      continue
-
-    interval_failure = failure_by_week.get(current_week, 0)
-    interval_activation = current_activation - previous_activation
-    if interval_activation <= 0:
+  cumulative_failure = 0
+  for current_week in available_weeks:
+    cumulative_failure += failure_by_week.get(current_week, 0)
+    cumulative_activation = cumulative_activation_by_week.get(current_week)
+    if cumulative_activation is None or cumulative_activation <= 0:
       continue
 
     trend_rows.append(
       {
-        "start_week": previous_week,
         "end_week": current_week,
-        "interval_failure": interval_failure,
-        "interval_activation": interval_activation,
-        "interval_cfr": interval_failure / interval_activation,
+        "cumulative_failure": cumulative_failure,
+        "cumulative_activation": cumulative_activation,
+        "cumulative_cfr": cumulative_failure / cumulative_activation,
       }
     )
 
   trend = pd.DataFrame(trend_rows)
   if trend.empty:
-    st.info("No interval CFR can be calculated for the current filter selection.")
+    st.info("No cumulative CFR can be calculated for the current filter selection.")
     return
 
   chart = (
@@ -842,15 +837,14 @@ def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]
     .encode(
       x=alt.X("end_week:N", axis=alt.Axis(labelAngle=-35, title=None)),
       y=alt.Y(
-        "interval_cfr:Q",
+        "cumulative_cfr:Q",
         axis=alt.Axis(title=None, format=".2%"),
       ),
       tooltip=[
-        alt.Tooltip("start_week:N", title="Start Week"),
-        alt.Tooltip("end_week:N", title="End Week"),
-        alt.Tooltip("interval_cfr:Q", title="Interval CFR", format=".2%"),
-        alt.Tooltip("interval_failure:Q", title="Interval Failure", format=",.0f"),
-        alt.Tooltip("interval_activation:Q", title="Interval Activation", format=",.0f"),
+        alt.Tooltip("end_week:N", title="Week"),
+        alt.Tooltip("cumulative_cfr:Q", title="Cumulative CFR", format=".2%"),
+        alt.Tooltip("cumulative_failure:Q", title="TTL Failures", format=",.0f"),
+        alt.Tooltip("cumulative_activation:Q", title="Cumulative ACT", format=",.0f"),
       ],
     )
     .properties(height=300)
@@ -1069,7 +1063,7 @@ def render_change_log():
         <li><strong>2026-06-12</strong> Streamlit POC 與視覺優化：調整 filter、Pareto、Heatmap 顏色與圖表標籤。</li>
         <li><strong>2026-06-15</strong> 資料解析強化：改善 upload feedback、支援 2025 CFR workbook、ACT summary model prefix match。</li>
         <li><strong>2026-06-26</strong> 新增 ACTION_DESC 結果洞察：Top cards、Pareto 與明細表，跟現有篩選器連動。</li>
-        <li><strong>2026-07-09</strong> 新增 ACT seed history 與 Continuous Interval CFR Trend，並將趨勢圖時間軸簡化為週別標籤。</li>
+        <li><strong>2026-07-09</strong> 新增 ACT seed history 與 Cumulative CFR Trend，並將趨勢圖時間軸簡化為週別標籤。</li>
       </ol>
     </div>
     """,
