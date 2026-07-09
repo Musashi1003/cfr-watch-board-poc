@@ -823,7 +823,6 @@ def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]
 
     trend_rows.append(
       {
-        "range": f"{previous_week} -> {current_week}",
         "start_week": previous_week,
         "end_week": current_week,
         "interval_failure": interval_failure,
@@ -841,7 +840,7 @@ def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]
     alt.Chart(trend)
     .mark_line(point=True, color=LINE_COLOR, strokeWidth=2.8)
     .encode(
-      x=alt.X("range:N", axis=alt.Axis(labelAngle=-35, title=None)),
+      x=alt.X("end_week:N", axis=alt.Axis(labelAngle=-35, title=None)),
       y=alt.Y(
         "interval_cfr:Q",
         axis=alt.Axis(title=None, format=".2%"),
@@ -1070,6 +1069,7 @@ def render_change_log():
         <li><strong>2026-06-12</strong> Streamlit POC 與視覺優化：調整 filter、Pareto、Heatmap 顏色與圖表標籤。</li>
         <li><strong>2026-06-15</strong> 資料解析強化：改善 upload feedback、支援 2025 CFR workbook、ACT summary model prefix match。</li>
         <li><strong>2026-06-26</strong> 新增 ACTION_DESC 結果洞察：Top cards、Pareto 與明細表，跟現有篩選器連動。</li>
+        <li><strong>2026-07-09</strong> 新增 ACT seed history 與 Continuous Interval CFR Trend，並將趨勢圖時間軸簡化為週別標籤。</li>
       </ol>
     </div>
     """,
