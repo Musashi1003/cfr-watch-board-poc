@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 import math
 import os
+import re
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -50,6 +53,13 @@ ACCENT_GREEN = "#12805c"
 ACCENT_RED = "#d83b35"
 TEXT_DARK = "#071316"
 PARSE_CACHE_VERSION = "2026-06-26-action-desc-v2"
+
+
+def week_sort_key(week: str) -> tuple[int, int, str]:
+  match = re.search(r"W?(\d{2})(\d{2})", week or "")
+  if not match:
+    return (0, 0, week or "")
+  return (int(match.group(1)), int(match.group(2)), week)
 
 
 def html_escape(value) -> str:
@@ -406,6 +416,52 @@ def parse_uploaded_payloads(upload_payloads: tuple[tuple[str, bytes], ...], pars
         pass
 
 
+@st.cache_resource
+def weekly_snapshot_history() -> dict[str, dict]:
+  return {}
+
+
+def latest_week_from_records(records: list[dict]) -> str:
+  weeks = sorted(
+    {str(record.get("Week", "")).strip() for record in records if str(record.get("Week", "")).strip()},
+    key=week_sort_key,
+  )
+  return weeks[-1] if weeks else ""
+
+
+def parsed_snapshot_digest(parsed: dict) -> str:
+  digest = hashlib.sha256()
+  for section_name in ("files", "summary_by_model", "records"):
+    section = parsed.get(section_name, {})
+    encoded = json.dumps(section, sort_keys=True, default=str, ensure_ascii=False, separators=(",", ":"))
+    digest.update(section_name.encode("utf-8"))
+    digest.update(encoded.encode("utf-8"))
+  return digest.hexdigest()
+
+
+def remember_weekly_snapshot(parsed: dict) -> str:
+  records = parsed.get("records", [])
+  week = latest_week_from_records(records)
+  if not week:
+    return "skipped"
+
+  store = weekly_snapshot_history()
+  digest = parsed_snapshot_digest(parsed)
+  existing = store.get(week)
+  if existing and existing.get("digest") == digest:
+    return "unchanged"
+
+  store[week] = {
+    "week": week,
+    "digest": digest,
+    "records": records,
+    "summary_by_model": parsed.get("summary_by_model", {}),
+    "files": parsed.get("files", []),
+    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+  }
+  return "updated" if existing else "added"
+
+
 def selected_filters(records: list[dict]) -> dict[str, list[str]]:
   current_selections = {
     key: [
@@ -636,6 +692,84 @@ def render_trend(result: dict):
       tooltip=[
         alt.Tooltip("week:N", title="Week"),
         alt.Tooltip("count:Q", title="Failure Qty"),
+      ],
+    )
+    .properties(height=300)
+  )
+  st.altair_chart(chart, width="stretch")
+
+
+def render_interval_cfr_trend(filters: dict[str, list[str]]):
+  st.subheader("Continuous Interval CFR Trend")
+  snapshots = [
+    weekly_snapshot_history()[week]
+    for week in sorted(weekly_snapshot_history(), key=week_sort_key)
+  ]
+  if len(snapshots) < 2:
+    st.info("At least two different weekly uploads are needed to draw the interval CFR trend.")
+    return
+
+  cumulative_rows = []
+  for snapshot in snapshots:
+    snapshot_result = analyze_dataset(
+      snapshot.get("records", []),
+      summary_by_model=snapshot.get("summary_by_model", {}),
+      primary_dimension="org_model",
+      breakdown_dimension="problem_mapping",
+      filters=filters,
+    )
+    kpis = snapshot_result["kpis"]
+    cumulative_rows.append(
+      {
+        "week": snapshot["week"],
+        "cumulative_failure": kpis["filtered_failure_qty"],
+        "cumulative_activation": kpis["derived_act"],
+      }
+    )
+
+  trend_rows = []
+  for previous, current in zip(cumulative_rows, cumulative_rows[1:]):
+    previous_activation = previous["cumulative_activation"]
+    current_activation = current["cumulative_activation"]
+    if previous_activation is None or current_activation is None:
+      continue
+
+    interval_failure = current["cumulative_failure"] - previous["cumulative_failure"]
+    interval_activation = current_activation - previous_activation
+    if interval_failure < 0 or interval_activation <= 0:
+      continue
+
+    trend_rows.append(
+      {
+        "range": f"{previous['week']} -> {current['week']}",
+        "start_week": previous["week"],
+        "end_week": current["week"],
+        "interval_failure": interval_failure,
+        "interval_activation": interval_activation,
+        "interval_cfr": interval_failure / interval_activation,
+      }
+    )
+
+  trend = pd.DataFrame(trend_rows)
+  if trend.empty:
+    st.info("No interval CFR can be calculated for the current filter selection.")
+    return
+
+  chart = (
+    alt.Chart(trend)
+    .mark_line(point=True, color=LINE_COLOR, strokeWidth=2.8)
+    .encode(
+      x=alt.X("range:N", axis=alt.Axis(labelAngle=-35, title=None)),
+      y=alt.Y(
+        "interval_cfr:Q",
+        axis=alt.Axis(title=None, format=".2%"),
+      ),
+      tooltip=[
+        alt.Tooltip("start_week:N", title="Start Week"),
+        alt.Tooltip("end_week:N", title="End Week"),
+        alt.Tooltip("interval_cfr:Q", title="Interval CFR", format=".2%"),
+        alt.Tooltip("interval_failure:Q", title="Interval Failure", format=",.0f"),
+        alt.Tooltip("interval_activation:Q", title="Interval Activation", format=",.0f"),
       ],
     )
     .properties(height=300)
@@ -916,6 +1050,7 @@ def main():
     render_parse_diagnostics(parsed)
     return
 
+  remember_weekly_snapshot(parsed)
   render_file_summary(parsed)
   selections = selected_filters(records)
   result = analyze_dataset(
@@ -946,6 +1081,9 @@ def main():
 
   st.divider()
   render_action_insight(result)
+
+  st.divider()
+  render_interval_cfr_trend(selections)
 
   st.divider()
   render_change_log()
