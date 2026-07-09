@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import hashlib
+from collections import Counter
 import hmac
-import json
 import math
 import os
 import re
@@ -53,6 +52,7 @@ ACCENT_GREEN = "#12805c"
 ACCENT_RED = "#d83b35"
 TEXT_DARK = "#071316"
 PARSE_CACHE_VERSION = "2026-06-26-action-desc-v2"
+ACTIVATION_HISTORY_PATH = Path(__file__).resolve().parent / "data" / "activation_history.csv"
 
 
 def week_sort_key(week: str) -> tuple[int, int, str]:
@@ -416,11 +416,6 @@ def parse_uploaded_payloads(upload_payloads: tuple[tuple[str, bytes], ...], pars
         pass
 
 
-@st.cache_resource
-def weekly_snapshot_history() -> dict[str, dict]:
-  return {}
-
-
 def latest_week_from_records(records: list[dict]) -> str:
   weeks = sorted(
     {str(record.get("Week", "")).strip() for record in records if str(record.get("Week", "")).strip()},
@@ -429,37 +424,53 @@ def latest_week_from_records(records: list[dict]) -> str:
   return weeks[-1] if weeks else ""
 
 
-def parsed_snapshot_digest(parsed: dict) -> str:
-  digest = hashlib.sha256()
-  for section_name in ("files", "summary_by_model", "records"):
-    section = parsed.get(section_name, {})
-    encoded = json.dumps(section, sort_keys=True, default=str, ensure_ascii=False, separators=(",", ":"))
-    digest.update(section_name.encode("utf-8"))
-    digest.update(encoded.encode("utf-8"))
-  return digest.hexdigest()
+def normalize_source_type(value) -> str:
+  upper_value = str(value or "").upper().replace("_", "-").replace(" ", "-")
+  if "GAMING" in upper_value:
+    return "Gaming NB"
+  if "PC" in upper_value:
+    return "PC NB"
+  return str(value or "").strip() or "Uploaded"
 
 
-def remember_weekly_snapshot(parsed: dict) -> str:
+@st.cache_resource
+def activation_history_store() -> dict[tuple[str, str, str], float]:
+  store: dict[tuple[str, str, str], float] = {}
+  if not ACTIVATION_HISTORY_PATH.exists():
+    return store
+
+  history = pd.read_csv(ACTIVATION_HISTORY_PATH)
+  for row in history.to_dict("records"):
+    source_type = normalize_source_type(row.get("source_type", ""))
+    model = str(row.get("model", "")).strip()
+    week = str(row.get("week", "")).strip()
+    if not model or not week:
+      continue
+    try:
+      activation = float(row.get("cumulative_activation", 0) or 0)
+    except (TypeError, ValueError):
+      activation = 0.0
+    store[(source_type, model, week)] = activation
+  return store
+
+
+def remember_activation_snapshot(parsed: dict) -> str:
   records = parsed.get("records", [])
   week = latest_week_from_records(records)
   if not week:
     return "skipped"
 
-  store = weekly_snapshot_history()
-  digest = parsed_snapshot_digest(parsed)
-  existing = store.get(week)
-  if existing and existing.get("digest") == digest:
-    return "unchanged"
-
-  store[week] = {
-    "week": week,
-    "digest": digest,
-    "records": records,
-    "summary_by_model": parsed.get("summary_by_model", {}),
-    "files": parsed.get("files", []),
-    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-  }
-  return "updated" if existing else "added"
+  store = activation_history_store()
+  updates = 0
+  for model, summary in parsed.get("summary_by_model", {}).items():
+    activation = summary.get("derived_act")
+    if activation is None:
+      continue
+    key = (normalize_source_type(summary.get("source_type", "")), str(model).strip(), week)
+    if store.get(key) != float(activation):
+      store[key] = float(activation)
+      updates += 1
+  return "updated" if updates else "unchanged"
 
 
 def selected_filters(records: list[dict]) -> dict[str, list[str]]:
@@ -699,51 +710,122 @@ def render_trend(result: dict):
   st.altair_chart(chart, width="stretch")
 
 
-def render_interval_cfr_trend(filters: dict[str, list[str]]):
-  st.subheader("Continuous Interval CFR Trend")
-  snapshots = [
-    weekly_snapshot_history()[week]
-    for week in sorted(weekly_snapshot_history(), key=week_sort_key)
+def selected_filter_values(value) -> set[str]:
+  if value is None:
+    return set()
+  if isinstance(value, str):
+    values = [value]
+  else:
+    values = list(value)
+  return {str(item).strip() for item in values if str(item).strip()}
+
+
+def filtered_records_for_filters(records: list[dict], filters: dict[str, list[str]]) -> list[dict]:
+  filtered = records
+  for filter_key, column_name in FILTER_FIELDS.items():
+    selected = selected_filter_values(filters.get(filter_key, []))
+    if not selected:
+      continue
+    filtered = [
+      record
+      for record in filtered
+      if (record.get(column_name) or "(blank)") in selected
+    ]
+  return filtered
+
+
+def activation_for_model_week(
+  store: dict[tuple[str, str, str], float],
+  source_type: str,
+  model: str,
+  week: str,
+) -> float | None:
+  exact = store.get((source_type, model, week))
+  if exact is not None:
+    return exact
+
+  fallback_values = [
+    value
+    for (stored_source, stored_model, stored_week), value in store.items()
+    if stored_model == model and stored_week == week
   ]
-  if len(snapshots) < 2:
-    st.info("At least two different weekly uploads are needed to draw the interval CFR trend.")
+  if not fallback_values:
+    return None
+  return sum(fallback_values)
+
+
+def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]):
+  st.subheader("Continuous Interval CFR Trend")
+  store = activation_history_store()
+  if not store:
+    st.info("No activation history is available yet.")
     return
 
-  cumulative_rows = []
-  for snapshot in snapshots:
-    snapshot_result = analyze_dataset(
-      snapshot.get("records", []),
-      summary_by_model=snapshot.get("summary_by_model", {}),
-      primary_dimension="org_model",
-      breakdown_dimension="problem_mapping",
-      filters=filters,
-    )
-    kpis = snapshot_result["kpis"]
-    cumulative_rows.append(
-      {
-        "week": snapshot["week"],
-        "cumulative_failure": kpis["filtered_failure_qty"],
-        "cumulative_activation": kpis["derived_act"],
-      }
-    )
+  filtered_records = filtered_records_for_filters(records, filters)
+  if not filtered_records:
+    st.info("No failure records match the current filter selection.")
+    return
+
+  model_scope = sorted(
+    {
+      (
+        normalize_source_type(record.get("source_type", "")),
+        str(record.get("ORG_MODEL(PRODUCT_DESC)", "")).strip(),
+      )
+      for record in filtered_records
+      if str(record.get("ORG_MODEL(PRODUCT_DESC)", "")).strip()
+    }
+  )
+  if not model_scope:
+    st.info("No model scope is available for the current filter selection.")
+    return
+
+  failure_by_week = Counter(
+    str(record.get("Week", "")).strip()
+    for record in filtered_records
+    if str(record.get("Week", "")).strip()
+  )
+  latest_uploaded_week = latest_week_from_records(records)
+  available_weeks = sorted(
+    {
+      week
+      for source_type, model in model_scope
+      for stored_source, stored_model, week in store
+      if stored_model == model and (stored_source == source_type or source_type == "Uploaded")
+      if not latest_uploaded_week or week_sort_key(week) <= week_sort_key(latest_uploaded_week)
+    },
+    key=week_sort_key,
+  )
+  if len(available_weeks) < 2:
+    st.info("At least two activation weeks are needed for the current filter selection.")
+    return
+
+  cumulative_activation_by_week = {}
+  for week in available_weeks:
+    activation_values = [
+      activation_for_model_week(store, source_type, model, week)
+      for source_type, model in model_scope
+    ]
+    valid_values = [value for value in activation_values if value is not None]
+    cumulative_activation_by_week[week] = sum(valid_values) if valid_values else None
 
   trend_rows = []
-  for previous, current in zip(cumulative_rows, cumulative_rows[1:]):
-    previous_activation = previous["cumulative_activation"]
-    current_activation = current["cumulative_activation"]
+  for previous_week, current_week in zip(available_weeks, available_weeks[1:]):
+    previous_activation = cumulative_activation_by_week.get(previous_week)
+    current_activation = cumulative_activation_by_week.get(current_week)
     if previous_activation is None or current_activation is None:
       continue
 
-    interval_failure = current["cumulative_failure"] - previous["cumulative_failure"]
+    interval_failure = failure_by_week.get(current_week, 0)
     interval_activation = current_activation - previous_activation
-    if interval_failure < 0 or interval_activation <= 0:
+    if interval_activation <= 0:
       continue
 
     trend_rows.append(
       {
-        "range": f"{previous['week']} -> {current['week']}",
-        "start_week": previous["week"],
-        "end_week": current["week"],
+        "range": f"{previous_week} -> {current_week}",
+        "start_week": previous_week,
+        "end_week": current_week,
         "interval_failure": interval_failure,
         "interval_activation": interval_activation,
         "interval_cfr": interval_failure / interval_activation,
@@ -1050,7 +1132,7 @@ def main():
     render_parse_diagnostics(parsed)
     return
 
-  remember_weekly_snapshot(parsed)
+  remember_activation_snapshot(parsed)
   render_file_summary(parsed)
   selections = selected_filters(records)
   result = analyze_dataset(
@@ -1083,7 +1165,7 @@ def main():
   render_action_insight(result)
 
   st.divider()
-  render_interval_cfr_trend(selections)
+  render_interval_cfr_trend(records, selections)
 
   st.divider()
   render_change_log()
