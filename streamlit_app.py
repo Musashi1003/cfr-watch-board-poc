@@ -1333,6 +1333,9 @@ def main():
   metric_row(result)
   st.divider()
 
+  render_interval_cfr_trend(records, selections)
+
+  st.divider()
   render_trend(result)
 
   left, right = st.columns(2)
@@ -1349,9 +1352,6 @@ def main():
 
   st.divider()
   render_action_insight(result)
-
-  st.divider()
-  render_interval_cfr_trend(records, selections)
 
   st.divider()
   render_change_log()
