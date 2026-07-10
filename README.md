@@ -123,4 +123,14 @@ APP_PASSWORD = "replace-with-a-strong-shared-password"
 
 `APP_USERNAME` is optional. `APP_PASSWORD` is required. If `APP_PASSWORD` is missing, the app will not show the upload dashboard.
 
+To let the app permanently save newly uploaded ACT history back to `data/activation_history.csv`, also add a GitHub fine-grained token with contents read/write permission for this repository:
+
+```toml
+ACT_HISTORY_GITHUB_TOKEN = "github_pat_..."
+ACT_HISTORY_GITHUB_REPO = "Musashi1003/cfr-watch-board-poc"
+ACT_HISTORY_GITHUB_BRANCH = "main"
+```
+
+If `ACT_HISTORY_GITHUB_TOKEN` is not configured, uploaded ACT values are still available in the current session and the app will offer an updated `activation_history.csv` download, but Streamlit restarts will not preserve those new rows automatically.
+
 This is a POC control layer only. For formal production use, use Streamlit private viewer settings, company SSO, Azure Web App authentication, or an internal server approved by IT.

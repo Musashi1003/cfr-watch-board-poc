@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 from collections import Counter
 import hmac
+import json
 import math
 import os
 import re
@@ -9,6 +11,7 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from urllib import error, request
 
 import altair as alt
 import pandas as pd
@@ -53,6 +56,10 @@ ACCENT_RED = "#d83b35"
 TEXT_DARK = "#071316"
 PARSE_CACHE_VERSION = "2026-06-26-action-desc-v2"
 ACTIVATION_HISTORY_PATH = Path(__file__).resolve().parent / "data" / "activation_history.csv"
+ACTIVATION_HISTORY_COLUMNS = ["source_type", "model", "week", "cumulative_activation", "source"]
+ACTIVATION_HISTORY_GITHUB_PATH = "data/activation_history.csv"
+DEFAULT_GITHUB_REPO = "Musashi1003/cfr-watch-board-poc"
+DEFAULT_GITHUB_BRANCH = "main"
 
 
 def week_sort_key(week: str) -> tuple[int, int, str]:
@@ -433,6 +440,12 @@ def normalize_source_type(value) -> str:
   return str(value or "").strip() or "Uploaded"
 
 
+def format_activation_value(value: float) -> str:
+  if abs(value - round(value)) < 0.0001:
+    return str(int(round(value)))
+  return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
 @st.cache_resource
 def activation_history_store() -> dict[tuple[str, str, str], float]:
   store: dict[tuple[str, str, str], float] = {}
@@ -454,23 +467,171 @@ def activation_history_store() -> dict[tuple[str, str, str], float]:
   return store
 
 
-def remember_activation_snapshot(parsed: dict) -> str:
+def activation_updates_from_parsed(parsed: dict) -> list[dict]:
   records = parsed.get("records", [])
   week = latest_week_from_records(records)
   if not week:
-    return "skipped"
+    return []
 
-  store = activation_history_store()
-  updates = 0
+  updates = []
   for model, summary in parsed.get("summary_by_model", {}).items():
     activation = summary.get("derived_act")
     if activation is None:
       continue
-    key = (normalize_source_type(summary.get("source_type", "")), str(model).strip(), week)
-    if store.get(key) != float(activation):
-      store[key] = float(activation)
-      updates += 1
-  return "updated" if updates else "unchanged"
+    model_name = str(model).strip()
+    if not model_name:
+      continue
+    updates.append(
+      {
+        "source_type": normalize_source_type(summary.get("source_type", "")),
+        "model": model_name,
+        "week": week,
+        "cumulative_activation": float(activation),
+        "source": "upload",
+      }
+    )
+  return updates
+
+
+def merge_activation_history(updates: list[dict]) -> tuple[pd.DataFrame, int, int]:
+  if ACTIVATION_HISTORY_PATH.exists():
+    history = pd.read_csv(ACTIVATION_HISTORY_PATH, dtype=str).fillna("")
+  else:
+    history = pd.DataFrame(columns=ACTIVATION_HISTORY_COLUMNS)
+
+  for column in ACTIVATION_HISTORY_COLUMNS:
+    if column not in history.columns:
+      history[column] = ""
+  history = history[ACTIVATION_HISTORY_COLUMNS].copy()
+
+  existing_index = {
+    (
+      normalize_source_type(row["source_type"]),
+      str(row["model"]).strip(),
+      str(row["week"]).strip(),
+    ): index
+    for index, row in history.iterrows()
+  }
+
+  for (source_type, model, week), activation in activation_history_store().items():
+    key = (source_type, model, week)
+    activation_text = format_activation_value(activation)
+    if key in existing_index:
+      history.at[existing_index[key], "cumulative_activation"] = activation_text
+      continue
+    history.loc[len(history)] = {
+      "source_type": source_type,
+      "model": model,
+      "week": week,
+      "cumulative_activation": activation_text,
+      "source": "upload",
+    }
+    existing_index[key] = len(history) - 1
+
+  added_count = 0
+  changed_count = 0
+  for update in updates:
+    key = (update["source_type"], update["model"], update["week"])
+    activation_text = format_activation_value(update["cumulative_activation"])
+    if key in existing_index:
+      row_index = existing_index[key]
+      old_value = str(history.at[row_index, "cumulative_activation"]).strip()
+      if old_value != activation_text:
+        history.at[row_index, "cumulative_activation"] = activation_text
+        history.at[row_index, "source"] = "upload"
+        changed_count += 1
+      continue
+
+    history.loc[len(history)] = {
+      "source_type": update["source_type"],
+      "model": update["model"],
+      "week": update["week"],
+      "cumulative_activation": activation_text,
+      "source": "upload",
+    }
+    existing_index[key] = len(history) - 1
+    added_count += 1
+
+  history["_source_order"] = history["source_type"].map({"PC NB": 0, "Gaming NB": 1}).fillna(9)
+  history["_week_order"] = history["week"].map(week_sort_key)
+  history = history.sort_values(["_source_order", "model", "_week_order"]).drop(columns=["_source_order", "_week_order"])
+  return history[ACTIVATION_HISTORY_COLUMNS], added_count, changed_count
+
+
+def activation_history_csv_text(history: pd.DataFrame) -> str:
+  return history.to_csv(index=False, lineterminator="\n")
+
+
+def github_request(url: str, method: str, token: str, payload: dict | None = None) -> dict:
+  body = json.dumps(payload).encode("utf-8") if payload is not None else None
+  api_request = request.Request(url, data=body, method=method)
+  api_request.add_header("Accept", "application/vnd.github+json")
+  api_request.add_header("Authorization", f"Bearer {token}")
+  api_request.add_header("X-GitHub-Api-Version", "2022-11-28")
+  if payload is not None:
+    api_request.add_header("Content-Type", "application/json")
+
+  with request.urlopen(api_request, timeout=20) as response:
+    return json.loads(response.read().decode("utf-8"))
+
+
+def write_activation_history_to_github(csv_text: str, changed_count: int, added_count: int) -> tuple[bool, str]:
+  token = read_secret("ACT_HISTORY_GITHUB_TOKEN") or read_secret("GITHUB_TOKEN")
+  if not token:
+    return False, "GitHub token is not configured."
+
+  repo = read_secret("ACT_HISTORY_GITHUB_REPO") or DEFAULT_GITHUB_REPO
+  branch = read_secret("ACT_HISTORY_GITHUB_BRANCH") or DEFAULT_GITHUB_BRANCH
+  path = read_secret("ACT_HISTORY_GITHUB_PATH") or ACTIVATION_HISTORY_GITHUB_PATH
+  contents_url = f"https://api.github.com/repos/{repo}/contents/{path}"
+
+  try:
+    current_file = github_request(f"{contents_url}?ref={branch}", "GET", token)
+    commit_message = (
+      f"Update activation history ({added_count} added, {changed_count} changed)"
+    )
+    github_request(
+      contents_url,
+      "PUT",
+      token,
+      {
+        "message": commit_message,
+        "content": base64.b64encode(csv_text.encode("utf-8")).decode("ascii"),
+        "branch": branch,
+        "sha": current_file["sha"],
+      },
+    )
+  except error.HTTPError as exc:
+    detail = exc.read().decode("utf-8", errors="replace")
+    return False, f"GitHub write failed: HTTP {exc.code} {detail[:220]}"
+  except Exception as exc:
+    return False, f"GitHub write failed: {exc}"
+
+  return True, f"Saved to GitHub {path} on {branch}."
+
+
+def remember_activation_snapshot(parsed: dict) -> dict:
+  updates = activation_updates_from_parsed(parsed)
+  if not updates:
+    return {"status": "skipped", "message": "No ACT values were found to record."}
+
+  merged_history, added_count, changed_count = merge_activation_history(updates)
+  store = activation_history_store()
+  for update in updates:
+    store[(update["source_type"], update["model"], update["week"])] = update["cumulative_activation"]
+
+  csv_text = activation_history_csv_text(merged_history)
+  if added_count == 0 and changed_count == 0:
+    return {"status": "unchanged", "message": "Activation history is already up to date."}
+
+  saved, message = write_activation_history_to_github(csv_text, changed_count, added_count)
+  return {
+    "status": "saved" if saved else "download",
+    "message": message,
+    "added_count": added_count,
+    "changed_count": changed_count,
+    "csv_text": csv_text,
+  }
 
 
 def selected_filters(records: list[dict]) -> dict[str, list[str]]:
@@ -498,6 +659,35 @@ def selected_filters(records: list[dict]) -> dict[str, list[str]]:
           label_visibility="collapsed",
         )
   return selections
+
+
+def render_activation_history_status(result: dict):
+  status = result.get("status")
+  message = result.get("message", "")
+  added_count = result.get("added_count", 0)
+  changed_count = result.get("changed_count", 0)
+
+  if status == "saved":
+    st.success(
+      f"Activation history saved: {added_count} new rows, {changed_count} updated rows. {message}"
+    )
+    return
+  if status == "unchanged":
+    st.info("Activation history is already up to date for this upload.")
+    return
+  if status == "skipped":
+    st.info(message or "No activation history update was needed.")
+    return
+  if status == "download":
+    st.warning(
+      f"Activation history was updated in this session, but could not be written back automatically. {message}"
+    )
+    st.download_button(
+      "Download updated activation_history.csv",
+      data=result.get("csv_text", ""),
+      file_name="activation_history.csv",
+      mime="text/csv",
+    )
 
 
 def metric_row(result: dict):
@@ -1064,6 +1254,7 @@ def render_change_log():
         <li><strong>2026-06-15</strong> 資料解析強化：改善 upload feedback、支援 2025 CFR workbook、ACT summary model prefix match。</li>
         <li><strong>2026-06-26</strong> 新增 ACTION_DESC 結果洞察：Top cards、Pareto 與明細表，跟現有篩選器連動。</li>
         <li><strong>2026-07-09</strong> 新增 ACT seed history 與 Cumulative CFR Trend，並將趨勢圖時間軸簡化為週別標籤。</li>
+        <li><strong>2026-07-10</strong> 新增上傳後自動擷取 ACT 並寫回 activation_history.csv 的流程；未設定 GitHub token 時提供 CSV 下載備援。</li>
       </ol>
     </div>
     """,
@@ -1126,8 +1317,9 @@ def main():
     render_parse_diagnostics(parsed)
     return
 
-  remember_activation_snapshot(parsed)
+  activation_history_result = remember_activation_snapshot(parsed)
   render_file_summary(parsed)
+  render_activation_history_status(activation_history_result)
   selections = selected_filters(records)
   result = analyze_dataset(
     records,
