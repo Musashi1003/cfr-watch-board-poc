@@ -1276,6 +1276,7 @@ def render_change_log():
         <li><strong>2026-06-26</strong> 新增 ACTION_DESC 結果洞察：Top cards、Pareto 與明細表，跟現有篩選器連動。</li>
         <li><strong>2026-07-09</strong> 新增 ACT seed history 與 Cumulative CFR Trend，並將趨勢圖時間軸簡化為週別標籤。</li>
         <li><strong>2026-07-10</strong> 新增上傳後自動擷取 ACT 並寫回 activation_history.csv 的流程；未設定 GitHub token 時提供 CSV 下載備援。</li>
+        <li><strong>2026-07-11</strong> 新增 Target Hit Rate 達標率 KPI，依篩選後 SUMMARY_IEC 的 CFR(A) for model 與 Target 比較達標/超標機型，並避免誤抓 Series CFR(A) Average。</li>
       </ol>
     </div>
     """,
