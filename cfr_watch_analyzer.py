@@ -95,6 +95,37 @@ def _header_index_by_pattern(headers: list[str], patterns: Iterable[str]) -> int
   return None
 
 
+def _header_year(header: str) -> str | None:
+  match = re.search(r"\b(20\d{2})\b", _clean(header))
+  return match.group(1) if match else None
+
+
+def _summary_metric_indices(headers: list[str]) -> tuple[int | None, int | None]:
+  cfr_candidates = [
+    index
+    for index, header in enumerate(headers)
+    if re.search(r"CFR\s*\(?A\)?", _clean(header), flags=re.IGNORECASE)
+    and re.search(r"for\s+model", _clean(header), flags=re.IGNORECASE)
+  ]
+  target_candidates = [
+    index
+    for index, header in enumerate(headers)
+    if re.search(r"\bTarget\b", _clean(header), flags=re.IGNORECASE)
+  ]
+
+  if not cfr_candidates:
+    return None, target_candidates[0] if target_candidates else None
+
+  cfr_index = cfr_candidates[0]
+  cfr_year = _header_year(headers[cfr_index])
+  if cfr_year:
+    for target_index in target_candidates:
+      if _header_year(headers[target_index]) == cfr_year:
+        return cfr_index, target_index
+
+  return cfr_index, target_candidates[0] if target_candidates else None
+
+
 def _detect_source_type(filename: str) -> str:
   upper_name = filename.upper()
   if "GAMING" in upper_name:
@@ -151,20 +182,7 @@ def _parse_summary_iec(workbook, filename: str) -> dict[str, dict]:
   headers = [_clean(value) for value in header_row]
   model_index = _header_index(headers, ("MODEL", "Model"))
   failure_index = _header_index(headers, ("IW Failure Q'ty", "IW Failure Qty", "IW Failure Quantity"))
-  cfr_index = _header_index_by_pattern(
-    headers,
-    (
-      r"^20\d{2}\s+CFR\(A\)\s+for\s+model$",
-      r"CFR\(A\).*for\s+model",
-    ),
-  )
-  target_index = _header_index_by_pattern(
-    headers,
-    (
-      r"^20\d{2}\s+Target$",
-      r"\bTarget\b",
-    ),
-  )
+  cfr_index, target_index = _summary_metric_indices(headers)
 
   if model_index is None or failure_index is None or cfr_index is None:
     return {}
@@ -436,6 +454,9 @@ def analyze_dataset(
     for summary_key in [_summary_key_for_model(model, summary_by_model)]
     if summary_key
   }
+  if not any(_selected_values(value) for value in filters.values()):
+    matched_summary_keys = set(summary_by_model)
+
   act_rows = [
     summary_by_model[summary_key]
     for summary_key in matched_summary_keys
@@ -450,6 +471,20 @@ def analyze_dataset(
     if row.get("target_cfr") is not None
   ]
   target_cfr = sum(target_values) / len(target_values) if target_values else None
+  target_comparison_rows = [
+    summary_by_model[summary_key]
+    for summary_key in matched_summary_keys
+    if summary_by_model[summary_key].get("summary_cfr") is not None
+    and summary_by_model[summary_key].get("target_cfr") is not None
+  ]
+  target_total_count = len(target_comparison_rows)
+  target_hit_count = sum(
+    1
+    for row in target_comparison_rows
+    if row["summary_cfr"] <= row["target_cfr"]
+  )
+  target_over_count = target_total_count - target_hit_count
+  target_hit_rate = target_hit_count / target_total_count if target_total_count else None
 
   cumulative = 0
   total_breakdown = sum(breakdown_counter.values()) or 1
@@ -570,6 +605,10 @@ def analyze_dataset(
       "derived_act": derived_act if derived_act else None,
       "act_model_count": len(act_rows),
       "target_cfr": target_cfr,
+      "target_hit_count": target_hit_count,
+      "target_total_count": target_total_count,
+      "target_over_count": target_over_count,
+      "target_hit_rate": target_hit_rate,
     },
     "source_mix": _counter_rows(source_counter),
     "trend": trend,

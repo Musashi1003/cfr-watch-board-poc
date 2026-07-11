@@ -578,7 +578,7 @@ def github_request(url: str, method: str, token: str, payload: dict | None = Non
 def write_activation_history_to_github(csv_text: str, changed_count: int, added_count: int) -> tuple[bool, str]:
   token = read_secret("ACT_HISTORY_GITHUB_TOKEN") or read_secret("GITHUB_TOKEN")
   if not token:
-    return False, "GitHub token is not configured."
+    return False, "尚未設定 Streamlit Secret `ACT_HISTORY_GITHUB_TOKEN`，因此無法永久寫回 GitHub。"
 
   repo = read_secret("ACT_HISTORY_GITHUB_REPO") or DEFAULT_GITHUB_REPO
   branch = read_secret("ACT_HISTORY_GITHUB_BRANCH") or DEFAULT_GITHUB_BRANCH
@@ -669,21 +669,21 @@ def render_activation_history_status(result: dict):
 
   if status == "saved":
     st.success(
-      f"Activation history saved: {added_count} new rows, {changed_count} updated rows. {message}"
+      f"ACT 記錄已保存：新增 {added_count} 筆，更新 {changed_count} 筆。{message}"
     )
     return
   if status == "unchanged":
-    st.info("Activation history is already up to date for this upload.")
+    st.info("本次上傳的 ACT 記錄已經是最新。")
     return
   if status == "skipped":
-    st.info(message or "No activation history update was needed.")
+    st.info(message or "本次上傳沒有需要更新的 ACT 記錄。")
     return
   if status == "download":
     st.warning(
-      f"Activation history was updated in this session, but could not be written back automatically. {message}"
+      f"ACT 記錄已在本次畫面更新，但尚未自動永久保存。{message}請下載更新後的 CSV，或請管理者補上 GitHub token 設定。"
     )
     st.download_button(
-      "Download updated activation_history.csv",
+      "下載更新後的 activation_history.csv",
       data=result.get("csv_text", ""),
       file_name="activation_history.csv",
       mime="text/csv",
@@ -692,10 +692,23 @@ def render_activation_history_status(result: dict):
 
 def metric_row(result: dict):
   kpis = result["kpis"]
-  cols = st.columns(4)
+  cols = st.columns(5)
   trend_values = [row["count"] for row in result.get("trend", [])]
   week_delta = kpis["week_delta"]
   delta_color = ACCENT_RED if week_delta > 0 else ACCENT_GREEN if week_delta < 0 else "#557179"
+  target_total_count = kpis.get("target_total_count", 0) or 0
+  target_over_count = kpis.get("target_over_count", 0)
+  target_accent = LINE_COLOR if target_total_count == 0 else ACCENT_GREEN if target_over_count == 0 else ACCENT_RED
+  target_note = (
+    f"{whole(kpis.get('target_hit_count'))} / {whole(target_total_count)} models on target"
+    if target_total_count
+    else "No comparable CFR target"
+  )
+  target_delta = (
+    f"{whole(target_over_count)} models over target"
+    if target_total_count
+    else "Need CFR(A) for model + Target"
+  )
   cards = [
     {
       "label": "Filtered CFR",
@@ -719,6 +732,14 @@ def metric_row(result: dict):
       "note": f"From SUMMARY_IEC CFR rule; {whole(kpis['act_model_count'])} ACT models",
       "accent": LINE_COLOR,
       "delta": "Current-upload estimate only",
+      "spark": "",
+    },
+    {
+      "label": "Target Hit Rate",
+      "value": pct(kpis.get("target_hit_rate")),
+      "note": target_note,
+      "accent": target_accent,
+      "delta": target_delta,
       "spark": "",
     },
     {
