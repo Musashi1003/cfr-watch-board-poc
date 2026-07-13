@@ -54,6 +54,14 @@ LINE_COLOR = "#075f73"
 ACCENT_GREEN = "#12805c"
 ACCENT_RED = "#d83b35"
 TEXT_DARK = "#071316"
+GROUP_COMPARE_COLORS = [
+  "#075f73",
+  "#d83b35",
+  "#12805c",
+  "#6f4eb2",
+  "#b35c00",
+  "#0f6fbd",
+]
 PARSE_CACHE_VERSION = "2026-06-26-action-desc-v2"
 ACTIVATION_HISTORY_PATH = Path(__file__).resolve().parent / "data" / "activation_history.csv"
 ACTIVATION_HISTORY_COLUMNS = ["source_type", "model", "week", "cumulative_activation", "source"]
@@ -661,6 +669,49 @@ def selected_filters(records: list[dict]) -> dict[str, list[str]]:
   return selections
 
 
+def filter_controls(records: list[dict], key_prefix: str) -> dict[str, list[str]]:
+  current_selections = {
+    key: [
+      str(value).strip()
+      for value in st.session_state.get(f"{key_prefix}_{key}", [])
+      if str(value).strip()
+    ]
+    for key in FILTER_FIELDS
+  }
+  options_by_filter = dataset_options(records, current_selections)
+  selections: dict[str, list[str]] = {}
+  for key in FILTER_ORDER:
+    options = options_by_filter.get(key, [])
+    selections[key] = st.multiselect(
+      FILTER_LABELS[key],
+      options,
+      default=current_selections.get(key, []),
+      key=f"{key_prefix}_{key}",
+    )
+  return selections
+
+
+def clean_filter_snapshot(filters: dict[str, list[str]]) -> dict[str, list[str]]:
+  return {
+    key: [str(value).strip() for value in filters.get(key, []) if str(value).strip()]
+    for key in FILTER_FIELDS
+  }
+
+
+def filter_snapshot_summary(filters: dict[str, list[str]]) -> str:
+  parts = []
+  for key in FILTER_ORDER:
+    values = filters.get(key, [])
+    if not values:
+      continue
+    label = FILTER_LABELS[key]
+    preview = ", ".join(values[:2])
+    if len(values) > 2:
+      preview = f"{preview} +{len(values) - 2}"
+    parts.append(f"{label}: {preview}")
+  return " | ".join(parts) if parts else "All records"
+
+
 def render_activation_history_status(result: dict):
   status = result.get("status")
   message = result.get("message", "")
@@ -965,17 +1016,14 @@ def activation_for_model_week(
   return sum(fallback_values)
 
 
-def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]):
-  st.subheader("Cumulative CFR Trend")
+def cumulative_cfr_trend_data(records: list[dict], filters: dict[str, list[str]]) -> tuple[pd.DataFrame, str]:
   store = activation_history_store()
   if not store:
-    st.info("No activation history is available yet.")
-    return
+    return pd.DataFrame(), "No activation history is available yet."
 
   filtered_records = filtered_records_for_filters(records, filters)
   if not filtered_records:
-    st.info("No failure records match the current filter selection.")
-    return
+    return pd.DataFrame(), "No failure records match the current filter selection."
 
   model_scope = sorted(
     {
@@ -988,8 +1036,7 @@ def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]
     }
   )
   if not model_scope:
-    st.info("No model scope is available for the current filter selection.")
-    return
+    return pd.DataFrame(), "No model scope is available for the current filter selection."
 
   failure_by_week = Counter(
     str(record.get("Week", "")).strip()
@@ -1008,8 +1055,7 @@ def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]
     key=week_sort_key,
   )
   if not available_weeks:
-    st.info("No activation weeks are available for the current filter selection.")
-    return
+    return pd.DataFrame(), "No activation weeks are available for the current filter selection."
 
   cumulative_activation_by_week = {}
   for week in available_weeks:
@@ -1039,7 +1085,15 @@ def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]
 
   trend = pd.DataFrame(trend_rows)
   if trend.empty:
-    st.info("No cumulative CFR can be calculated for the current filter selection.")
+    return pd.DataFrame(), "No cumulative CFR can be calculated for the current filter selection."
+  return trend, ""
+
+
+def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]):
+  st.subheader("Cumulative CFR Trend")
+  trend, message = cumulative_cfr_trend_data(records, filters)
+  if trend.empty:
+    st.info(message)
     return
 
   chart = (
@@ -1061,6 +1115,144 @@ def render_interval_cfr_trend(records: list[dict], filters: dict[str, list[str]]
     .properties(height=300)
   )
   st.altair_chart(chart, width="stretch")
+
+
+def reset_group_compare_if_upload_changed(upload_payloads: tuple[tuple[str, bytes], ...]):
+  upload_signature = tuple((filename, len(file_bytes)) for filename, file_bytes in upload_payloads)
+  if st.session_state.get("group_compare_upload_signature") == upload_signature:
+    return
+  st.session_state["group_compare_upload_signature"] = upload_signature
+  st.session_state["group_compare_groups"] = []
+
+
+def next_group_name(groups: list[dict]) -> str:
+  return f"G{len(groups) + 1}"
+
+
+def unique_group_name(label: str, groups: list[dict]) -> str:
+  existing = {str(group.get("label", "")).strip() for group in groups}
+  if label not in existing:
+    return label
+  suffix = 2
+  while f"{label} ({suffix})" in existing:
+    suffix += 1
+  return f"{label} ({suffix})"
+
+
+def render_group_compare(records: list[dict]):
+  st.markdown("### Group CFR Compare")
+  groups = st.session_state.setdefault("group_compare_groups", [])
+
+  with st.container():
+    draft_filters = filter_controls(records, "compare_filter")
+    default_name = next_group_name(groups)
+    group_name = st.text_input("Group name", value=default_name, key="compare_group_name")
+    add_col, clear_col = st.columns([1, 1])
+    with add_col:
+      add_clicked = st.button("Add Group", type="primary", width="stretch")
+    with clear_col:
+      clear_clicked = st.button("Clear Groups", width="stretch", disabled=not groups)
+
+  if clear_clicked:
+    st.session_state["group_compare_groups"] = []
+    st.rerun()
+
+  if add_clicked:
+    snapshot = clean_filter_snapshot(draft_filters)
+    label = unique_group_name(group_name.strip() or default_name, groups)
+    st.session_state["group_compare_groups"].append(
+      {
+        "label": label,
+        "filters": snapshot,
+      }
+    )
+    st.rerun()
+
+  if not groups:
+    st.info("Add at least one group to show CFR trend lines.")
+    return
+
+  st.markdown("#### Groups")
+  for index, group in enumerate(list(groups)):
+    columns = st.columns([1.2, 4, 0.8])
+    with columns[0]:
+      st.markdown(f"**{html_escape(group['label'])}**")
+    with columns[1]:
+      st.caption(filter_snapshot_summary(group.get("filters", {})))
+    with columns[2]:
+      if st.button("Remove", key=f"remove_compare_group_{index}", width="stretch"):
+        del st.session_state["group_compare_groups"][index]
+        st.rerun()
+
+  trend_frames = []
+  skipped = []
+  for index, group in enumerate(groups):
+    trend, message = cumulative_cfr_trend_data(records, group.get("filters", {}))
+    if trend.empty:
+      skipped.append(f"{group['label']}: {message}")
+      continue
+    trend = trend.copy()
+    trend["group"] = group["label"]
+    trend["group_order"] = index
+    trend_frames.append(trend)
+
+  if not trend_frames:
+    st.info("No cumulative CFR can be calculated for the added groups.")
+    for message in skipped:
+      st.caption(message)
+    return
+
+  trend_all = pd.concat(trend_frames, ignore_index=True)
+  color_range = [
+    GROUP_COMPARE_COLORS[index % len(GROUP_COMPARE_COLORS)]
+    for index, _ in enumerate(groups)
+  ]
+  color_scale = alt.Scale(
+    domain=[group["label"] for group in groups],
+    range=color_range,
+  )
+  chart = (
+    alt.Chart(trend_all)
+    .mark_line(point=True, strokeWidth=2.8)
+    .encode(
+      x=alt.X("end_week:N", axis=alt.Axis(labelAngle=-35, title=None), sort=None),
+      y=alt.Y(
+        "cumulative_cfr:Q",
+        axis=alt.Axis(title=None, format=".2%"),
+      ),
+      color=alt.Color("group:N", scale=color_scale, legend=alt.Legend(title="Group")),
+      tooltip=[
+        alt.Tooltip("group:N", title="Group"),
+        alt.Tooltip("end_week:N", title="Week"),
+        alt.Tooltip("cumulative_cfr:Q", title="Cumulative CFR", format=".2%"),
+        alt.Tooltip("cumulative_failure:Q", title="TTL Failures", format=",.0f"),
+        alt.Tooltip("cumulative_activation:Q", title="Cumulative ACT", format=",.0f"),
+      ],
+    )
+    .properties(height=360)
+  )
+  st.altair_chart(chart, width="stretch")
+
+  summary_rows = []
+  for group in groups:
+    group_rows = trend_all[trend_all["group"] == group["label"]]
+    if group_rows.empty:
+      continue
+    latest_row = group_rows.iloc[-1]
+    summary_rows.append(
+      {
+        "Group": group["label"],
+        "Latest Week": latest_row["end_week"],
+        "Cumulative CFR": pct(latest_row["cumulative_cfr"]),
+        "TTL Failures": whole(latest_row["cumulative_failure"]),
+        "Cumulative ACT": whole(latest_row["cumulative_activation"]),
+        "Scope": filter_snapshot_summary(group.get("filters", {})),
+      }
+    )
+  if summary_rows:
+    st.dataframe(pd.DataFrame(summary_rows), width="stretch", hide_index=True)
+  for message in skipped:
+    st.caption(message)
 
 
 def render_pareto(result: dict):
@@ -1314,6 +1506,7 @@ def main():
     return
 
   upload_payloads = build_upload_payloads(uploaded_files)
+  reset_group_compare_if_upload_changed(upload_payloads)
   total_upload_mb = uploaded_size_mb(upload_payloads)
   parse_notice = st.empty()
   parse_notice.info(f"{upload_summary_text(upload_payloads)} Reading the Excel raw data now.")
@@ -1342,6 +1535,19 @@ def main():
   activation_history_result = remember_activation_snapshot(parsed)
   render_file_summary(parsed)
   render_activation_history_status(activation_history_result)
+
+  mode_options = ["Dashboard", "Group Compare"]
+  if hasattr(st, "segmented_control"):
+    view_mode = st.segmented_control("Mode", mode_options, default="Dashboard")
+  else:
+    view_mode = st.radio("Mode", mode_options, horizontal=True)
+
+  if view_mode == "Group Compare":
+    render_group_compare(records)
+    st.divider()
+    render_change_log()
+    return
+
   selections = selected_filters(records)
   result = analyze_dataset(
     records,
