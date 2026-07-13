@@ -776,9 +776,38 @@ def filter_snapshot_summary(filters: dict[str, list[str]]) -> str:
     label = FILTER_LABELS[key]
     preview = ", ".join(values[:2])
     if len(values) > 2:
-      preview = f"{preview} +{len(values) - 2}"
+      preview = f"{preview}，另 {len(values) - 2} 個"
     parts.append(f"{label}: {preview}")
   return " | ".join(parts) if parts else "All records"
+
+
+def filter_snapshot_details(filters: dict[str, list[str]]) -> pd.DataFrame:
+  rows = []
+  for key in FILTER_ORDER:
+    values = filters.get(key, [])
+    rows.append(
+      {
+        "Filter": FILTER_LABELS[key],
+        "Selected Values": ", ".join(values) if values else "All",
+      }
+    )
+  return pd.DataFrame(rows)
+
+
+def normalized_filter_signature(filters: dict[str, list[str]]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+  snapshot = clean_filter_snapshot(filters)
+  return tuple(
+    (key, tuple(sorted(snapshot.get(key, []))))
+    for key in FILTER_ORDER
+  )
+
+
+def matching_group_label(filters: dict[str, list[str]], groups: list[dict]) -> str | None:
+  signature = normalized_filter_signature(filters)
+  for group in groups:
+    if normalized_filter_signature(group.get("filters", {})) == signature:
+      return str(group.get("label", "")).strip() or "another group"
+  return None
 
 
 def render_activation_history_status(result: dict):
@@ -1138,7 +1167,8 @@ def cumulative_cfr_trend_data(records: list[dict], filters: dict[str, list[str]]
   trend_rows = []
   cumulative_failure = 0
   for current_week in available_weeks:
-    cumulative_failure += failure_by_week.get(current_week, 0)
+    weekly_failure = failure_by_week.get(current_week, 0)
+    cumulative_failure += weekly_failure
     cumulative_activation = cumulative_activation_by_week.get(current_week)
     if cumulative_activation is None or cumulative_activation <= 0:
       continue
@@ -1146,6 +1176,7 @@ def cumulative_cfr_trend_data(records: list[dict], filters: dict[str, list[str]]
     trend_rows.append(
       {
         "end_week": current_week,
+        "weekly_failure": weekly_failure,
         "cumulative_failure": cumulative_failure,
         "cumulative_activation": cumulative_activation,
         "cumulative_cfr": cumulative_failure / cumulative_activation,
@@ -1208,11 +1239,86 @@ def unique_group_name(label: str, groups: list[dict]) -> str:
   return f"{label} ({suffix})"
 
 
+def group_latest_rows(trend_all: pd.DataFrame) -> list[dict]:
+  rows = []
+  for group, group_rows in trend_all.groupby("group", sort=False):
+    sorted_rows = group_rows.sort_values("end_week", key=lambda series: series.map(week_sort_key))
+    latest_row = sorted_rows.iloc[-1]
+    previous_row = sorted_rows.iloc[-2] if len(sorted_rows) > 1 else None
+    previous_cfr = previous_row["cumulative_cfr"] if previous_row is not None else None
+    latest_cfr = latest_row["cumulative_cfr"]
+    change = latest_cfr - previous_cfr if previous_cfr is not None else None
+    relative_change = (
+      change / previous_cfr
+      if previous_cfr not in (None, 0)
+      else None
+    )
+    alert = ""
+    if relative_change is not None and relative_change >= 0.2:
+      alert = "Sharp increase"
+    elif previous_cfr in (None, 0) and latest_cfr > 0:
+      alert = "New CFR"
+
+    rows.append(
+      {
+        "group": group,
+        "latest_week": latest_row["end_week"],
+        "latest_cfr": latest_cfr,
+        "previous_cfr": previous_cfr,
+        "wow_change": change,
+        "alert": alert or "OK",
+        "cumulative_failure": latest_row["cumulative_failure"],
+        "cumulative_activation": latest_row["cumulative_activation"],
+      }
+    )
+  return rows
+
+
+def pp(value: float | None) -> str:
+  if value is None:
+    return "N/A"
+  sign = "+" if value > 0 else ""
+  return f"{sign}{value * 100:.2f} pp"
+
+
+def render_group_insight_cards(latest_rows: list[dict]):
+  if not latest_rows:
+    return
+
+  highest = max(latest_rows, key=lambda row: row["latest_cfr"])
+  lowest = min(latest_rows, key=lambda row: row["latest_cfr"])
+  gap = highest["latest_cfr"] - lowest["latest_cfr"]
+  latest_week = max((row["latest_week"] for row in latest_rows), key=week_sort_key)
+
+  cards = [
+    ("Highest CFR", highest["group"], pct(highest["latest_cfr"])),
+    ("Lowest CFR", lowest["group"], pct(lowest["latest_cfr"])),
+    ("Largest Gap", f"{highest['group']} vs {lowest['group']}", pp(gap)),
+    ("Latest Week", latest_week, f"{len(latest_rows)} groups"),
+  ]
+  columns = st.columns(4)
+  for column, (label, title, value) in zip(columns, cards):
+    with column:
+      st.markdown(
+        f"""
+        <div class="metric-card" style="--accent: {LINE_COLOR}; min-height: 118px;">
+          <div class="metric-label">{html_escape(label)}</div>
+          <div class="metric-value" style="font-size: 1.15rem;">{html_escape(title)}</div>
+          <div class="metric-note">{html_escape(value)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+      )
+
+
 def render_group_compare(records: list[dict]):
   st.markdown("### Group CFR Compare")
+  st.caption("Cumulative CFR = TTL Failures / Cumulative ACT. TTL Failures is cumulative through each week for the selected group scope.")
   groups = st.session_state.setdefault("group_compare_groups", [])
 
-  with st.container():
+  builder_col, group_col = st.columns([1, 1.25])
+  with builder_col:
+    st.markdown("#### Group Builder")
     draft_filters = filter_controls(records, "compare_filter")
     default_name = next_group_name(groups)
     group_name = st.text_input("Group name", value=default_name, key="compare_group_name")
@@ -1222,36 +1328,49 @@ def render_group_compare(records: list[dict]):
     with clear_col:
       clear_clicked = st.button("Clear Groups", width="stretch", disabled=not groups)
 
-  if clear_clicked:
-    st.session_state["group_compare_groups"] = []
-    st.rerun()
+    if clear_clicked:
+      st.session_state["group_compare_groups"] = []
+      st.rerun()
 
-  if add_clicked:
-    snapshot = clean_filter_snapshot(draft_filters)
-    label = unique_group_name(group_name.strip() or default_name, groups)
-    st.session_state["group_compare_groups"].append(
-      {
-        "label": label,
-        "filters": snapshot,
-      }
-    )
-    st.rerun()
+    if add_clicked:
+      snapshot = clean_filter_snapshot(draft_filters)
+      duplicate_label = matching_group_label(snapshot, groups)
+      if duplicate_label:
+        st.warning(f"This group has the same scope as {duplicate_label}.")
+      else:
+        label = unique_group_name(group_name.strip() or default_name, groups)
+        st.session_state["group_compare_groups"].append(
+          {
+            "label": label,
+            "filters": snapshot,
+          }
+        )
+        st.rerun()
+
+  with group_col:
+    st.markdown("#### Groups")
+    if not groups:
+      st.info("Add at least one group to show CFR trend lines.")
+    for index, group in enumerate(list(groups)):
+      with st.container():
+        columns = st.columns([1.15, 3.2, 0.95])
+        with columns[0]:
+          st.markdown(f"**{html_escape(group['label'])}**")
+        with columns[1]:
+          st.caption(filter_snapshot_summary(group.get("filters", {})))
+        with columns[2]:
+          if st.button("Remove", key=f"remove_compare_group_{index}", width="stretch"):
+            del st.session_state["group_compare_groups"][index]
+            st.rerun()
+        with st.expander(f"{group['label']} details", expanded=False):
+          st.dataframe(
+            filter_snapshot_details(group.get("filters", {})),
+            width="stretch",
+            hide_index=True,
+          )
 
   if not groups:
-    st.info("Add at least one group to show CFR trend lines.")
     return
-
-  st.markdown("#### Groups")
-  for index, group in enumerate(list(groups)):
-    columns = st.columns([1.2, 4, 0.8])
-    with columns[0]:
-      st.markdown(f"**{html_escape(group['label'])}**")
-    with columns[1]:
-      st.caption(filter_snapshot_summary(group.get("filters", {})))
-    with columns[2]:
-      if st.button("Remove", key=f"remove_compare_group_{index}", width="stretch"):
-        del st.session_state["group_compare_groups"][index]
-        st.rerun()
 
   trend_frames = []
   skipped = []
@@ -1272,6 +1391,16 @@ def render_group_compare(records: list[dict]):
     return
 
   trend_all = pd.concat(trend_frames, ignore_index=True)
+  latest_rows = group_latest_rows(trend_all)
+  render_group_insight_cards(latest_rows)
+
+  chart_metric = st.radio(
+    "Chart metric",
+    ["Cumulative CFR", "Weekly Failure Qty"],
+    horizontal=True,
+    key="group_compare_chart_metric",
+  )
+
   color_range = [
     GROUP_COMPARE_COLORS[index % len(GROUP_COMPARE_COLORS)]
     for index, _ in enumerate(groups)
@@ -1280,39 +1409,56 @@ def render_group_compare(records: list[dict]):
     domain=[group["label"] for group in groups],
     range=color_range,
   )
+  week_order = sorted(trend_all["end_week"].dropna().unique(), key=week_sort_key)
+  if chart_metric == "Weekly Failure Qty":
+    y_field = "weekly_failure:Q"
+    y_axis = alt.Axis(title=None, format=",.0f")
+    tooltips = [
+      alt.Tooltip("group:N", title="Group"),
+      alt.Tooltip("end_week:N", title="Week"),
+      alt.Tooltip("weekly_failure:Q", title="Weekly Failures", format=",.0f"),
+      alt.Tooltip("cumulative_failure:Q", title="TTL Failures", format=",.0f"),
+    ]
+  else:
+    y_field = "cumulative_cfr:Q"
+    y_axis = alt.Axis(title=None, format=".2%")
+    tooltips = [
+      alt.Tooltip("group:N", title="Group"),
+      alt.Tooltip("end_week:N", title="Week"),
+      alt.Tooltip("cumulative_cfr:Q", title="Cumulative CFR", format=".2%"),
+      alt.Tooltip("cumulative_failure:Q", title="TTL Failures", format=",.0f"),
+      alt.Tooltip("cumulative_activation:Q", title="Cumulative ACT", format=",.0f"),
+    ]
+
   chart = (
     alt.Chart(trend_all)
     .mark_line(point=True, strokeWidth=2.8)
     .encode(
-      x=alt.X("end_week:N", axis=alt.Axis(labelAngle=-35, title=None), sort=None),
-      y=alt.Y(
-        "cumulative_cfr:Q",
-        axis=alt.Axis(title=None, format=".2%"),
-      ),
+      x=alt.X("end_week:N", axis=alt.Axis(labelAngle=-35, title=None), sort=week_order),
+      y=alt.Y(y_field, axis=y_axis),
       color=alt.Color("group:N", scale=color_scale, legend=alt.Legend(title="Group")),
-      tooltip=[
-        alt.Tooltip("group:N", title="Group"),
-        alt.Tooltip("end_week:N", title="Week"),
-        alt.Tooltip("cumulative_cfr:Q", title="Cumulative CFR", format=".2%"),
-        alt.Tooltip("cumulative_failure:Q", title="TTL Failures", format=",.0f"),
-        alt.Tooltip("cumulative_activation:Q", title="Cumulative ACT", format=",.0f"),
-      ],
+      tooltip=tooltips,
     )
     .properties(height=360)
   )
   st.altair_chart(chart, width="stretch")
 
+  latest_by_group = {row["group"]: row for row in latest_rows}
+  best_cfr = min((row["latest_cfr"] for row in latest_rows), default=None)
   summary_rows = []
   for group in groups:
-    group_rows = trend_all[trend_all["group"] == group["label"]]
-    if group_rows.empty:
+    latest_row = latest_by_group.get(group["label"])
+    if not latest_row:
       continue
-    latest_row = group_rows.iloc[-1]
     summary_rows.append(
       {
         "Group": group["label"],
-        "Latest Week": latest_row["end_week"],
-        "Cumulative CFR": pct(latest_row["cumulative_cfr"]),
+        "Latest Week": latest_row["latest_week"],
+        "Latest CFR": pct(latest_row["latest_cfr"]),
+        "Previous CFR": pct(latest_row["previous_cfr"]),
+        "WoW Change": pp(latest_row["wow_change"]),
+        "Gap vs Best": pp(latest_row["latest_cfr"] - best_cfr) if best_cfr is not None else "N/A",
+        "Alert": latest_row["alert"],
         "TTL Failures": whole(latest_row["cumulative_failure"]),
         "Cumulative ACT": whole(latest_row["cumulative_activation"]),
         "Scope": filter_snapshot_summary(group.get("filters", {})),
@@ -1538,7 +1684,7 @@ def render_change_log():
         <li><strong>2026-07-09</strong> 新增 ACT seed history 與 Cumulative CFR Trend，並將趨勢圖時間軸簡化為週別標籤。</li>
         <li><strong>2026-07-10</strong> 新增上傳後自動擷取 ACT 並寫回 activation_history.csv 的流程；未設定 GitHub token 時提供 CSV 下載備援。</li>
         <li><strong>2026-07-11</strong> 新增 Target Hit Rate 達標率 KPI，依篩選後 SUMMARY_IEC 的 CFR(A) for model 與 Target 比較達標/超標機型，並避免誤抓 Series CFR(A) Average。</li>
-        <li><strong>2026-07-13</strong> 新增 Group CFR Compare 獨立模式，可用篩選器建立 G1/G2 群組並比較多條 Cumulative CFR 趨勢線；同步將模式切換改為 Analysis Mode 區塊與選中按鈕高亮。群組數量建議以 2-4 組為主，超過 4 組時線圖、legend 與顏色辨識度會下降；目前提供 6 色循環顯示。</li>
+        <li><strong>2026-07-13</strong> 新增 Group CFR Compare 獨立模式，可用篩選器建立 G1/G2 群組並比較多條 Cumulative CFR 趨勢線；同步將模式切換改為 Analysis Mode 區塊與選中按鈕高亮。群組數量建議以 2-4 組為主，超過 4 組時線圖、legend 與顏色辨識度會下降；目前提供 6 色循環顯示。GOG 介面新增左右分區、scope 展開明細、重複群組防呆、判讀卡、WoW/Gap/Alert 欄位，以及 Cumulative CFR / Weekly Failure Qty 圖表切換。</li>
       </ol>
     </div>
     """,
