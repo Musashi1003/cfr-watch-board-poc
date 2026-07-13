@@ -1538,7 +1538,7 @@ def render_change_log():
         <li><strong>2026-07-09</strong> 新增 ACT seed history 與 Cumulative CFR Trend，並將趨勢圖時間軸簡化為週別標籤。</li>
         <li><strong>2026-07-10</strong> 新增上傳後自動擷取 ACT 並寫回 activation_history.csv 的流程；未設定 GitHub token 時提供 CSV 下載備援。</li>
         <li><strong>2026-07-11</strong> 新增 Target Hit Rate 達標率 KPI，依篩選後 SUMMARY_IEC 的 CFR(A) for model 與 Target 比較達標/超標機型，並避免誤抓 Series CFR(A) Average。</li>
-        <li><strong>2026-07-13</strong> 新增 Group CFR Compare 獨立模式，可用篩選器建立 G1/G2 群組並比較多條 Cumulative CFR 趨勢線；同步將模式切換改為 Analysis Mode 區塊與選中按鈕高亮。</li>
+        <li><strong>2026-07-13</strong> 新增 Group CFR Compare 獨立模式，可用篩選器建立 G1/G2 群組並比較多條 Cumulative CFR 趨勢線；同步將模式切換改為 Analysis Mode 區塊與選中按鈕高亮。群組數量建議以 2-4 組為主，超過 4 組時線圖、legend 與顏色辨識度會下降；目前提供 6 色循環顯示。</li>
       </ol>
     </div>
     """,
