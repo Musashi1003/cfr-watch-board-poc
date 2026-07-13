@@ -190,6 +190,39 @@ def apply_page_style():
         color: #62767b;
         margin: 0;
       }
+      .mode-head {
+        margin-top: 1.25rem;
+        margin-bottom: 0.55rem;
+      }
+      .mode-note {
+        color: #557179;
+        font-size: 0.85rem;
+        white-space: nowrap;
+      }
+      .stButton > button {
+        border-radius: 8px;
+        min-height: 2.55rem;
+        font-weight: 700;
+      }
+      .stButton > button[kind="primary"] {
+        background: #075f73;
+        border-color: #075f73;
+        color: #ffffff;
+      }
+      .stButton > button[kind="primary"]:hover {
+        background: #064f60;
+        border-color: #064f60;
+        color: #ffffff;
+      }
+      .stButton > button[kind="secondary"] {
+        background: #ffffff;
+        border-color: #cddbdd;
+        color: #122426;
+      }
+      .stButton > button[kind="secondary"]:hover {
+        border-color: #138a8e;
+        color: #075f73;
+      }
       .refresh-note {
         color: #557179;
         font-size: 0.85rem;
@@ -388,6 +421,42 @@ def dashboard_header(result: dict):
     """,
     unsafe_allow_html=True,
   )
+
+
+def render_mode_selector() -> str:
+  current_mode = st.session_state.get("view_mode", "Dashboard")
+  current_label = "Overview Dashboard" if current_mode == "Dashboard" else "Group CFR Compare"
+  st.markdown(
+    f"""
+    <div class="dashboard-head mode-head">
+      <div>
+        <h2>Analysis Mode</h2>
+      </div>
+      <div class="mode-note">Current: {current_label}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+  )
+
+  dashboard_col, compare_col, _ = st.columns([1.15, 1.2, 5.2])
+  with dashboard_col:
+    if st.button(
+      "Overview Dashboard",
+      type="primary" if current_mode == "Dashboard" else "secondary",
+      width="stretch",
+    ):
+      st.session_state["view_mode"] = "Dashboard"
+      st.rerun()
+  with compare_col:
+    if st.button(
+      "Group CFR Compare",
+      type="primary" if current_mode == "Group Compare" else "secondary",
+      width="stretch",
+    ):
+      st.session_state["view_mode"] = "Group Compare"
+      st.rerun()
+
+  return st.session_state.get("view_mode", "Dashboard")
 
 
 def write_uploads_to_temp_files(uploaded_files) -> tuple[list[WorkbookUpload], list[Path]]:
@@ -1536,11 +1605,7 @@ def main():
   render_file_summary(parsed)
   render_activation_history_status(activation_history_result)
 
-  mode_options = ["Dashboard", "Group Compare"]
-  if hasattr(st, "segmented_control"):
-    view_mode = st.segmented_control("Mode", mode_options, default="Dashboard")
-  else:
-    view_mode = st.radio("Mode", mode_options, horizontal=True)
+  view_mode = render_mode_selector()
 
   if view_mode == "Group Compare":
     render_group_compare(records)
