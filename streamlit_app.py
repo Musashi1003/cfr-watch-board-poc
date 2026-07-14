@@ -47,6 +47,7 @@ FILTER_ORDER = (
   "muc_module",
   "problem_mapping",
 )
+ACT_SCOPE_FILTERS = ("segment", "model", "odm_oem")
 
 BAR_COLOR = "#1a9295"
 BAR_LIGHT_COLOR = "#8fd6d5"
@@ -1094,6 +1095,28 @@ def filtered_records_for_filters(records: list[dict], filters: dict[str, list[st
   return filtered
 
 
+def act_scope_records_for_filters(records: list[dict], filters: dict[str, list[str]]) -> list[dict]:
+  act_filters = {
+    filter_key: filters.get(filter_key, [])
+    for filter_key in ACT_SCOPE_FILTERS
+  }
+  return filtered_records_for_filters(records, act_filters)
+
+
+def model_scope_for_filters(records: list[dict], filters: dict[str, list[str]]) -> list[tuple[str, str]]:
+  scope_records = act_scope_records_for_filters(records, filters)
+  return sorted(
+    {
+      (
+        normalize_source_type(record.get("source_type", "")),
+        str(record.get("ORG_MODEL(PRODUCT_DESC)", "")).strip(),
+      )
+      for record in scope_records
+      if str(record.get("ORG_MODEL(PRODUCT_DESC)", "")).strip()
+    }
+  )
+
+
 def activation_for_model_week(
   store: dict[tuple[str, str, str], float],
   source_type: str,
@@ -1123,16 +1146,7 @@ def cumulative_cfr_trend_data(records: list[dict], filters: dict[str, list[str]]
   if not filtered_records:
     return pd.DataFrame(), "No failure records match the current filter selection."
 
-  model_scope = sorted(
-    {
-      (
-        normalize_source_type(record.get("source_type", "")),
-        str(record.get("ORG_MODEL(PRODUCT_DESC)", "")).strip(),
-      )
-      for record in filtered_records
-      if str(record.get("ORG_MODEL(PRODUCT_DESC)", "")).strip()
-    }
-  )
+  model_scope = model_scope_for_filters(records, filters)
   if not model_scope:
     return pd.DataFrame(), "No model scope is available for the current filter selection."
 
