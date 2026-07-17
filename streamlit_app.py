@@ -69,6 +69,7 @@ ACTIVATION_HISTORY_COLUMNS = ["source_type", "model", "week", "cumulative_activa
 ACTIVATION_HISTORY_GITHUB_PATH = "data/activation_history.csv"
 DEFAULT_GITHUB_REPO = "Musashi1003/cfr-watch-board-poc"
 DEFAULT_GITHUB_BRANCH = "main"
+APP_SESSION_VERSION = "2026-07-17-session-reset"
 
 
 def week_sort_key(week: str) -> tuple[int, int, str]:
@@ -124,6 +125,13 @@ def password_gate() -> bool:
     st.error("Account or password is incorrect.")
 
   return False
+
+
+def reset_session_if_app_version_changed():
+  if st.session_state.get("app_session_version") == APP_SESSION_VERSION:
+    return
+  st.session_state.clear()
+  st.session_state["app_session_version"] = APP_SESSION_VERSION
 
 
 def apply_page_style():
@@ -1707,6 +1715,7 @@ def render_change_log():
 
 
 def main():
+  reset_session_if_app_version_changed()
   apply_page_style()
   st.markdown('<div class="cfr-title">CFR Watch Board</div>', unsafe_allow_html=True)
   st.markdown(
