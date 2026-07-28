@@ -903,9 +903,9 @@ def metric_row(result: dict):
     {
       "label": "Latest WoW",
       "value": f"{week_delta:+,}",
-      "note": f"{kpis['previous_week']} to {kpis['latest_week']}",
+      "note": f"{kpis['latest_week']} {whole(kpis['latest_count'])} - {kpis['previous_week']} {whole(kpis['previous_count'])}",
       "accent": delta_color,
-      "delta": "Failure count change",
+      "delta": "Latest week failures - previous available week",
       "spark": sparkline_svg(trend_values[-6:], delta_color),
     },
   ]
