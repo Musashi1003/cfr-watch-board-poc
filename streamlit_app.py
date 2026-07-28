@@ -948,14 +948,16 @@ def bar_chart(frame: pd.DataFrame, x_column: str, y_column: str, height: int = 2
 
 
 def rows_to_pareto_frame(rows: list[dict], limit: int = 12) -> pd.DataFrame:
-  frame = pd.DataFrame(rows).head(limit).copy()
+  frame = pd.DataFrame(rows).copy()
   if frame.empty:
     return frame
   frame["cumulative_count"] = frame["count"].cumsum()
-  total = frame["count"].sum() or 1
   if "share" not in frame:
+    total = frame["count"].sum() or 1
     frame["share"] = frame["count"] / total * 100
-  frame["cumulative"] = frame["cumulative_count"] / total * 100
+  if "cumulative" not in frame:
+    frame["cumulative"] = frame["share"].cumsum()
+  frame = frame.head(limit).copy()
   frame["short_label"] = frame["label"].str.slice(0, 26)
   return frame
 
