@@ -848,12 +848,46 @@ def render_activation_history_status(result: dict):
     )
 
 
-def metric_row(result: dict):
+def activation_trend_values(records: list[dict], filters: dict[str, list[str]], max_points: int = 12) -> list[int]:
+  store = activation_history_store()
+  if not store:
+    return []
+
+  model_scope = model_scope_for_filters(records, filters)
+  if not model_scope:
+    return []
+
+  latest_uploaded_week = latest_week_from_records(records)
+  available_weeks = sorted(
+    {
+      week
+      for source_type, model in model_scope
+      for stored_source, stored_model, week in store
+      if stored_model == model and (stored_source == source_type or source_type == "Uploaded")
+      if not latest_uploaded_week or week_sort_key(week) <= week_sort_key(latest_uploaded_week)
+    },
+    key=week_sort_key,
+  )
+
+  values = []
+  for week in available_weeks:
+    activation_values = [
+      activation_for_model_week(store, source_type, model, week)
+      for source_type, model in model_scope
+    ]
+    valid_values = [value for value in activation_values if value is not None]
+    if valid_values:
+      total_activation = sum(valid_values)
+      if total_activation > 0:
+        values.append(int(round(total_activation)))
+  return values[-max_points:]
+
+
+def metric_row(result: dict, records: list[dict]):
   kpis = result["kpis"]
-  cols = st.columns(5)
+  cols = st.columns(4)
   trend_values = [row["count"] for row in result.get("trend", [])]
-  week_delta = kpis["week_delta"]
-  delta_color = ACCENT_RED if week_delta > 0 else ACCENT_GREEN if week_delta < 0 else "#557179"
+  act_trend_values = activation_trend_values(records, result.get("filters", {}))
   target_total_count = kpis.get("target_total_count", 0) or 0
   target_over_count = kpis.get("target_over_count", 0)
   target_accent = LINE_COLOR if target_total_count == 0 else ACCENT_GREEN if target_over_count == 0 else ACCENT_RED
@@ -889,8 +923,8 @@ def metric_row(result: dict):
       "value": whole(kpis["derived_act"]),
       "note": f"From SUMMARY_IEC CFR rule; {whole(kpis['act_model_count'])} ACT models",
       "accent": LINE_COLOR,
-      "delta": "Current-upload estimate only",
-      "spark": "",
+      "delta": "ACT history trend" if len(act_trend_values) >= 2 else "Current-upload estimate only",
+      "spark": sparkline_svg(act_trend_values, LINE_COLOR),
     },
     {
       "label": "Target Hit Rate",
@@ -899,14 +933,6 @@ def metric_row(result: dict):
       "accent": target_accent,
       "delta": target_delta,
       "spark": "",
-    },
-    {
-      "label": "Latest WoW",
-      "value": f"{week_delta:+,}",
-      "note": f"{kpis['latest_week']} {whole(kpis['latest_count'])} - {kpis['previous_week']} {whole(kpis['previous_count'])}",
-      "accent": delta_color,
-      "delta": "Latest week failures - previous available week",
-      "spark": sparkline_svg(trend_values[-6:], delta_color),
     },
   ]
   for column, card in zip(cols, cards):
@@ -1817,7 +1843,7 @@ def main():
   )
 
   dashboard_header(result)
-  metric_row(result)
+  metric_row(result, records)
   st.divider()
 
   render_interval_cfr_trend(records, selections)
