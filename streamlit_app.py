@@ -947,17 +947,39 @@ def bar_chart(frame: pd.DataFrame, x_column: str, y_column: str, height: int = 2
   st.altair_chart(chart, width="stretch")
 
 
-def rows_to_pareto_frame(rows: list[dict], limit: int = 12) -> pd.DataFrame:
+def rows_to_pareto_frame(rows: list[dict], top_n: int = 10) -> pd.DataFrame:
   frame = pd.DataFrame(rows).copy()
   if frame.empty:
     return frame
-  frame["cumulative_count"] = frame["count"].cumsum()
+  frame["_source_order"] = range(len(frame))
+  frame = frame.sort_values(["count", "_source_order"], ascending=[False, True]).drop(columns=["_source_order"])
   if "share" not in frame:
     total = frame["count"].sum() or 1
     frame["share"] = frame["count"] / total * 100
-  if "cumulative" not in frame:
-    frame["cumulative"] = frame["share"].cumsum()
-  frame = frame.head(limit).copy()
+
+  if len(frame) > top_n:
+    top_rows = frame.head(top_n).copy()
+    other_rows = frame.iloc[top_n:]
+    others = {
+      "label": "Others",
+      "count": other_rows["count"].sum(),
+      "share": other_rows["share"].sum(),
+    }
+    for column_name in other_rows.columns:
+      if column_name in {"label", "count", "share", "cumulative", "cumulative_count"}:
+        continue
+      if pd.api.types.is_numeric_dtype(other_rows[column_name]):
+        others[column_name] = other_rows[column_name].sum()
+      else:
+        others[column_name] = "Multiple"
+    frame = pd.concat([top_rows, pd.DataFrame([others])], ignore_index=True)
+  else:
+    frame = frame.head(top_n).copy()
+
+  frame["cumulative_count"] = frame["count"].cumsum()
+  frame["cumulative"] = frame["share"].cumsum()
+  if not frame.empty:
+    frame.loc[frame.index[-1], "cumulative"] = 100.0
   frame["short_label"] = frame["label"].str.slice(0, 26)
   return frame
 
@@ -1537,7 +1559,7 @@ def render_action_insight(result: dict):
       "No ACTION_DESC data in the current filter.",
     )
   with right:
-    detail = pd.DataFrame(rows).head(10)
+    detail = rows_to_pareto_frame(rows)
     if detail.empty:
       st.info("No ACTION_DESC detail data in the current filter.")
       return

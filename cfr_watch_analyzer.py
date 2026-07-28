@@ -489,7 +489,7 @@ def analyze_dataset(
   cumulative = 0
   total_breakdown = sum(breakdown_counter.values()) or 1
   pareto_rows = []
-  for label, count in breakdown_counter.most_common(15):
+  for label, count in breakdown_counter.most_common():
     cumulative += count
     pareto_rows.append(
       {
@@ -503,7 +503,7 @@ def analyze_dataset(
   cumulative = 0
   total_actions = sum(action_counter.values()) or 1
   action_rows = []
-  for label, count in action_counter.most_common(15):
+  for label, count in action_counter.most_common():
     cumulative += count
     action_records = [
       record
@@ -613,7 +613,7 @@ def analyze_dataset(
     "source_mix": _counter_rows(source_counter),
     "trend": trend,
     "share": _counter_rows(primary_counter, 12),
-    "module_ratio": _counter_rows(module_counter, 12),
+    "module_ratio": _counter_rows(module_counter),
     "pareto": pareto_rows,
     "action_desc": action_rows,
     "heatmap_columns": top_breakdown_labels,
