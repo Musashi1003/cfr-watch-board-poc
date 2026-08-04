@@ -30,6 +30,8 @@ FILTER_FIELDS = {
   "problem_mapping": "PROBLEM_Mapping",
 }
 
+ACT_SCOPE_FILTER_KEYS = ("segment", "model", "odm_oem")
+
 RAW_SHEET_NAME = "raw data"
 SUMMARY_SHEET_NAME = "SUMMARY_IEC"
 MAX_CONSECUTIVE_EMPTY_ROWS = 200
@@ -49,6 +51,8 @@ COLUMN_ALIASES = {
   "ODM_OEM": ("ODM_OEM", "ODM/OEM", "ODM OEM"),
   "MUC_MODULE": ("MUC_MODULE", "MUC MODULE", "MODULE"),
   "PROBLEM_Mapping": ("PROBLEM_Mapping", "PROBLEM Mapping", "Problem Mapping", "PROBLEM_MAPPING"),
+  "MODEL_GROUP": ("MODEL_GROUP", "MODEL GROUP"),
+  "開賣年度": ("開賣年度", "LAUNCH_YEAR", "OPEN_YEAR", "SALE_YEAR"),
   ACTION_FIELD: ("ACTION_DESC", "ACTION DESC", "ACTION_DESCRIPTION", "ACTION DESCRIPTION"),
 }
 
@@ -278,8 +282,16 @@ def parse_workbooks(workbooks: Iterable[WorkbookUpload]) -> dict:
       if missing:
         missing_columns_by_file[upload.filename] = missing
       optional_indices = {
-        optional_field: _header_index(headers, (optional_field,))
-        for optional_field in ("REGION", "COUNTRY", "PRODUCT_LINE", "CUSTOMER_NAME", "REPAIR_LEVEL")
+        optional_field: _header_index(headers, COLUMN_ALIASES.get(optional_field, (optional_field,)))
+        for optional_field in (
+          "REGION",
+          "COUNTRY",
+          "PRODUCT_LINE",
+          "CUSTOMER_NAME",
+          "REPAIR_LEVEL",
+          "MODEL_GROUP",
+          "開賣年度",
+        )
       }
 
       row_count = 0
@@ -443,18 +455,23 @@ def analyze_dataset(
     if _clean(record.get(ACTION_FIELD, ""))
   )
   source_counter = Counter(record.get("source_type", "") or "Uploaded" for record in filtered_records)
-  filtered_models = {
+  act_scope_filters = {
+    filter_key: filters.get(filter_key, [])
+    for filter_key in ACT_SCOPE_FILTER_KEYS
+  }
+  act_scope_records = _apply_filters(records, act_scope_filters)
+  act_scope_models = {
     record.get("ORG_MODEL(PRODUCT_DESC)", "")
-    for record in filtered_records
+    for record in act_scope_records
     if record.get("ORG_MODEL(PRODUCT_DESC)", "")
   }
   matched_summary_keys = {
     summary_key
-    for model in filtered_models
+    for model in act_scope_models
     for summary_key in [_summary_key_for_model(model, summary_by_model)]
     if summary_key
   }
-  if not any(_selected_values(value) for value in filters.values()):
+  if not any(_selected_values(value) for value in act_scope_filters.values()):
     matched_summary_keys = set(summary_by_model)
 
   act_rows = [

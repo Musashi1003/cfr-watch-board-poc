@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 from collections import Counter
+from copy import copy
 import hmac
+from io import BytesIO
 import json
 import math
 import os
@@ -14,6 +16,7 @@ from tempfile import NamedTemporaryFile
 from urllib import error, request
 
 import altair as alt
+import openpyxl
 import pandas as pd
 import streamlit as st
 
@@ -67,6 +70,8 @@ PARSE_CACHE_VERSION = "2026-06-26-action-desc-v2"
 ACTIVATION_HISTORY_PATH = Path(__file__).resolve().parent / "data" / "activation_history.csv"
 ACTIVATION_HISTORY_COLUMNS = ["source_type", "model", "week", "cumulative_activation", "source"]
 ACTIVATION_HISTORY_GITHUB_PATH = "data/activation_history.csv"
+ACT_TABLE_PATH = Path(__file__).resolve().parent / "ACT table.xlsx"
+ACT_TABLE_GITHUB_PATH = "ACT table.xlsx"
 DEFAULT_GITHUB_REPO = "Musashi1003/cfr-watch-board-poc"
 DEFAULT_GITHUB_BRANCH = "main"
 APP_SESSION_VERSION = "2026-07-17-session-reset"
@@ -532,24 +537,153 @@ def format_activation_value(value: float) -> str:
   return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
+def act_table_source_type(value) -> str:
+  source_type = normalize_source_type(value)
+  if source_type == "Gaming NB":
+    return "GAMING-NB"
+  if source_type == "PC NB":
+    return "PC-NB"
+  return str(value or "").strip() or "Uploaded"
+
+
+def clean_launch_year(value) -> str:
+  match = re.search(r"(20\d{2})", str(value or ""))
+  return match.group(1) if match else ""
+
+
+def launch_year_from_record(record: dict) -> str:
+  for key in ("\u958b\u8ce3\u5e74\u5ea6", "LAUNCH_YEAR", "OPEN_YEAR", "SALE_YEAR"):
+    launch_year = clean_launch_year(record.get(key, ""))
+    if launch_year:
+      return launch_year
+  return ""
+
+
+def act_model_from_record(record: dict) -> str:
+  launch_year = launch_year_from_record(record)
+  if launch_year == "2025":
+    model_group = str(record.get("MODEL_GROUP", "")).strip()
+    if model_group:
+      return model_group
+  return str(record.get("ORG_MODEL(PRODUCT_DESC)", "")).strip()
+
+
+def normalized_identifier(value: str) -> str:
+  return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def summary_key_for_model(model: str, summary_by_model: dict[str, dict]) -> str | None:
+  if model in summary_by_model:
+    return model
+
+  model_key = normalized_identifier(model)
+  if not model_key:
+    return None
+
+  prefix_matches = [
+    summary_model
+    for summary_model in summary_by_model
+    if len(normalized_identifier(summary_model)) >= 4
+    and model_key.startswith(normalized_identifier(summary_model))
+  ]
+  if not prefix_matches:
+    return None
+  return max(prefix_matches, key=lambda summary_model: len(normalized_identifier(summary_model)))
+
+
+def configured_act_table_path() -> Path:
+  configured_path = read_secret("ACT_TABLE_PATH").strip()
+  if configured_path:
+    return Path(configured_path)
+
+  if ACT_TABLE_PATH.exists():
+    return ACT_TABLE_PATH
+
+  local_fallback = Path(r"C:\=Codex study==\20260604-Sites in Codex\ACT table.xlsx")
+  if local_fallback.exists():
+    return local_fallback
+
+  return ACT_TABLE_PATH
+
+
+def numeric_activation(value) -> float | None:
+  if value is None or value == "":
+    return None
+  if isinstance(value, (int, float)):
+    return float(value)
+  text = str(value).strip().replace(",", "")
+  if not text:
+    return None
+  try:
+    return float(text)
+  except ValueError:
+    return None
+
+
+def load_act_table_store() -> dict[tuple[str, str, str], float]:
+  path = configured_act_table_path()
+  if not path.exists():
+    return {}
+
+  store: dict[tuple[str, str, str], float] = {}
+  workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+  try:
+    for worksheet in workbook.worksheets:
+      header_row = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
+      if not header_row:
+        continue
+      headers = [str(value or "").strip() for value in header_row]
+      normalized_headers = {normalized_identifier(header): index for index, header in enumerate(headers)}
+      source_index = normalized_headers.get("GAMINGPC")
+      model_index = (
+        normalized_headers.get("ORGMODELPRODUCTDESC")
+        or normalized_headers.get("MODELGROUP")
+        or normalized_headers.get("MODEL")
+      )
+      if source_index is None or model_index is None:
+        continue
+
+      week_indices = [
+        (index, header)
+        for index, header in enumerate(headers)
+        if re.fullmatch(r"W\d{4}", header, flags=re.IGNORECASE)
+      ]
+      if not week_indices:
+        continue
+
+      for row in worksheet.iter_rows(min_row=2, values_only=True):
+        source_type = normalize_source_type(row[source_index] if source_index < len(row) else "")
+        model = str(row[model_index] if model_index < len(row) else "").strip()
+        if not source_type or not model:
+          continue
+        for week_index, week in week_indices:
+          activation = numeric_activation(row[week_index] if week_index < len(row) else None)
+          if activation is None:
+            continue
+          store[(source_type, model, week.upper())] = activation
+  finally:
+    workbook.close()
+  return store
+
+
 @st.cache_resource
 def activation_history_store() -> dict[tuple[str, str, str], float]:
   store: dict[tuple[str, str, str], float] = {}
-  if not ACTIVATION_HISTORY_PATH.exists():
-    return store
+  if ACTIVATION_HISTORY_PATH.exists():
+    history = pd.read_csv(ACTIVATION_HISTORY_PATH)
+    for row in history.to_dict("records"):
+      source_type = normalize_source_type(row.get("source_type", ""))
+      model = str(row.get("model", "")).strip()
+      week = str(row.get("week", "")).strip()
+      if not model or not week:
+        continue
+      try:
+        activation = float(row.get("cumulative_activation", 0) or 0)
+      except (TypeError, ValueError):
+        activation = 0.0
+      store[(source_type, model, week)] = activation
 
-  history = pd.read_csv(ACTIVATION_HISTORY_PATH)
-  for row in history.to_dict("records"):
-    source_type = normalize_source_type(row.get("source_type", ""))
-    model = str(row.get("model", "")).strip()
-    week = str(row.get("week", "")).strip()
-    if not model or not week:
-      continue
-    try:
-      activation = float(row.get("cumulative_activation", 0) or 0)
-    except (TypeError, ValueError):
-      activation = 0.0
-    store[(source_type, model, week)] = activation
+  store.update(load_act_table_store())
   return store
 
 
@@ -559,20 +693,41 @@ def activation_updates_from_parsed(parsed: dict) -> list[dict]:
   if not week:
     return []
 
+  summary_by_model = parsed.get("summary_by_model", {})
+  scope_by_act_model: dict[tuple[str, str, str], set[str]] = {}
+  for record in records:
+    source_type = normalize_source_type(record.get("source_type", ""))
+    launch_year = launch_year_from_record(record)
+    act_model = act_model_from_record(record)
+    raw_model = str(record.get("ORG_MODEL(PRODUCT_DESC)", "")).strip()
+    if not source_type or not launch_year or not act_model or not raw_model:
+      continue
+    scope_by_act_model.setdefault((source_type, launch_year, act_model), set()).add(raw_model)
+
   updates = []
-  for model, summary in parsed.get("summary_by_model", {}).items():
-    activation = summary.get("derived_act")
-    if activation is None:
+  for (source_type, launch_year, act_model), raw_models in sorted(scope_by_act_model.items()):
+    activation = 0.0
+    matched_models = 0
+    for raw_model in raw_models:
+      summary_key = summary_key_for_model(raw_model, summary_by_model)
+      if not summary_key:
+        continue
+      derived_act = summary_by_model[summary_key].get("derived_act")
+      if derived_act is None:
+        continue
+      activation += float(derived_act)
+      matched_models += 1
+
+    if not matched_models:
       continue
-    model_name = str(model).strip()
-    if not model_name:
-      continue
+
     updates.append(
       {
-        "source_type": normalize_source_type(summary.get("source_type", "")),
-        "model": model_name,
+        "source_type": source_type,
+        "launch_year": launch_year,
+        "model": act_model,
         "week": week,
-        "cumulative_activation": float(activation),
+        "cumulative_activation": activation,
         "source": "upload",
       }
     )
@@ -616,8 +771,26 @@ def merge_activation_history(updates: list[dict]) -> tuple[pd.DataFrame, int, in
 
   added_count = 0
   changed_count = 0
+  act_table_store = load_act_table_store()
   for update in updates:
     key = (update["source_type"], update["model"], update["week"])
+    if key in act_table_store:
+      activation_text = format_activation_value(act_table_store[key])
+      if key in existing_index:
+        row_index = existing_index[key]
+        history.at[row_index, "cumulative_activation"] = activation_text
+        history.at[row_index, "source"] = "act_table"
+      else:
+        history.loc[len(history)] = {
+          "source_type": update["source_type"],
+          "model": update["model"],
+          "week": update["week"],
+          "cumulative_activation": activation_text,
+          "source": "act_table",
+        }
+        existing_index[key] = len(history) - 1
+      continue
+
     activation_text = format_activation_value(update["cumulative_activation"])
     if key in existing_index:
       row_index = existing_index[key]
@@ -664,7 +837,7 @@ def github_request(url: str, method: str, token: str, payload: dict | None = Non
 def write_activation_history_to_github(csv_text: str, changed_count: int, added_count: int) -> tuple[bool, str]:
   token = read_secret("ACT_HISTORY_GITHUB_TOKEN") or read_secret("GITHUB_TOKEN")
   if not token:
-    return False, "尚未設定 Streamlit Secret `ACT_HISTORY_GITHUB_TOKEN`，因此無法永久寫回 GitHub。"
+    return False, "GitHub token is not configured."
 
   repo = read_secret("ACT_HISTORY_GITHUB_REPO") or DEFAULT_GITHUB_REPO
   branch = read_secret("ACT_HISTORY_GITHUB_BRANCH") or DEFAULT_GITHUB_BRANCH
@@ -673,9 +846,7 @@ def write_activation_history_to_github(csv_text: str, changed_count: int, added_
 
   try:
     current_file = github_request(f"{contents_url}?ref={branch}", "GET", token)
-    commit_message = (
-      f"Update activation history ({added_count} added, {changed_count} changed)"
-    )
+    commit_message = f"Update activation history ({added_count} added, {changed_count} changed)"
     github_request(
       contents_url,
       "PUT",
@@ -695,6 +866,171 @@ def write_activation_history_to_github(csv_text: str, changed_count: int, added_
 
   return True, f"Saved to GitHub {path} on {branch}."
 
+def write_bytes_to_github(path: str, content: bytes, commit_message: str) -> tuple[bool, str]:
+  token = read_secret("ACT_HISTORY_GITHUB_TOKEN") or read_secret("GITHUB_TOKEN")
+  if not token:
+    return False, "GitHub token is not configured."
+
+  repo = read_secret("ACT_HISTORY_GITHUB_REPO") or DEFAULT_GITHUB_REPO
+  branch = read_secret("ACT_HISTORY_GITHUB_BRANCH") or DEFAULT_GITHUB_BRANCH
+  contents_url = f"https://api.github.com/repos/{repo}/contents/{path}"
+
+  payload = {
+    "message": commit_message,
+    "content": base64.b64encode(content).decode("ascii"),
+    "branch": branch,
+  }
+  try:
+    current_file = github_request(f"{contents_url}?ref={branch}", "GET", token)
+    payload["sha"] = current_file["sha"]
+  except error.HTTPError as exc:
+    if exc.code != 404:
+      detail = exc.read().decode("utf-8", errors="replace")
+      return False, f"GitHub write failed: HTTP {exc.code} {detail[:220]}"
+  except Exception as exc:
+    return False, f"GitHub write failed: {exc}"
+
+  try:
+    github_request(contents_url, "PUT", token, payload)
+  except error.HTTPError as exc:
+    detail = exc.read().decode("utf-8", errors="replace")
+    return False, f"GitHub write failed: HTTP {exc.code} {detail[:220]}"
+  except Exception as exc:
+    return False, f"GitHub write failed: {exc}"
+
+  return True, f"Saved to GitHub {path} on {branch}."
+
+
+def worksheet_header_map(worksheet) -> dict[str, int]:
+  header_row = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
+  if not header_row:
+    return {}
+  return {
+    normalized_identifier(value): index + 1
+    for index, value in enumerate(header_row)
+    if str(value or "").strip()
+  }
+
+
+def ensure_act_sheet(workbook, launch_year: str):
+  sheet_name = f"{launch_year} ACT"
+  if sheet_name in workbook.sheetnames:
+    return workbook[sheet_name]
+
+  worksheet = workbook.create_sheet(sheet_name)
+  model_header = "MODEL_GROUP" if launch_year == "2025" else "ORG_MODEL(PRODUCT_DESC)"
+  worksheet.append(["\u958b\u8ce3\u5e74\u5ea6", "GAMING/PC", model_header])
+  return worksheet
+
+
+def ensure_week_column(worksheet, week: str) -> int:
+  headers = worksheet_header_map(worksheet)
+  week_key = normalized_identifier(week)
+  if week_key in headers:
+    return headers[week_key]
+
+  new_column = worksheet.max_column + 1
+  worksheet.cell(row=1, column=new_column).value = week
+  if new_column > 1:
+    source_cell = worksheet.cell(row=1, column=new_column - 1)
+    target_cell = worksheet.cell(row=1, column=new_column)
+    if source_cell.has_style:
+      target_cell._style = copy(source_cell._style)
+    target_cell.number_format = source_cell.number_format
+    target_cell.alignment = copy(source_cell.alignment)
+  return new_column
+
+
+def act_table_row_key(worksheet, row_index: int, source_column: int, model_column: int) -> tuple[str, str]:
+  source_type = normalize_source_type(worksheet.cell(row=row_index, column=source_column).value)
+  model = str(worksheet.cell(row=row_index, column=model_column).value or "").strip()
+  return source_type, model
+
+
+def find_or_create_act_row(worksheet, update: dict, source_column: int, model_column: int) -> int:
+  target_key = (update["source_type"], update["model"])
+  for row_index in range(2, worksheet.max_row + 1):
+    if act_table_row_key(worksheet, row_index, source_column, model_column) == target_key:
+      return row_index
+
+  row_index = worksheet.max_row + 1
+  worksheet.cell(row=row_index, column=1).value = int(update["launch_year"])
+  worksheet.cell(row=row_index, column=source_column).value = act_table_source_type(update["source_type"])
+  worksheet.cell(row=row_index, column=model_column).value = update["model"]
+  if row_index > 2:
+    for column in range(1, worksheet.max_column + 1):
+      source_cell = worksheet.cell(row=row_index - 1, column=column)
+      target_cell = worksheet.cell(row=row_index, column=column)
+      if source_cell.has_style:
+        target_cell._style = copy(source_cell._style)
+      target_cell.number_format = source_cell.number_format
+      target_cell.alignment = copy(source_cell.alignment)
+  return row_index
+
+
+def update_act_table_workbook(updates: list[dict]) -> dict:
+  if not updates:
+    return {"status": "skipped", "message": "No ACT values were found to record."}
+
+  path = configured_act_table_path()
+  if path.exists():
+    workbook = openpyxl.load_workbook(path)
+  else:
+    workbook = openpyxl.Workbook()
+    workbook.remove(workbook.active)
+
+  added_count = 0
+  kept_count = 0
+  try:
+    for update in updates:
+      launch_year = str(update.get("launch_year", "")).strip()
+      if not launch_year:
+        continue
+      worksheet = ensure_act_sheet(workbook, launch_year)
+      headers = worksheet_header_map(worksheet)
+      source_column = headers.get("GAMINGPC") or 2
+      model_column = (
+        headers.get("ORGMODELPRODUCTDESC")
+        or headers.get("MODELGROUP")
+        or headers.get("MODEL")
+        or 3
+      )
+      week_column = ensure_week_column(worksheet, update["week"])
+      row_index = find_or_create_act_row(worksheet, update, source_column, model_column)
+      target_cell = worksheet.cell(row=row_index, column=week_column)
+      existing_value = numeric_activation(target_cell.value)
+      if existing_value is not None:
+        kept_count += 1
+        continue
+      target_cell.value = int(round(update["cumulative_activation"]))
+      target_cell.number_format = "#,##0"
+      added_count += 1
+
+    output = BytesIO()
+    workbook.save(output)
+  finally:
+    workbook.close()
+
+  if added_count == 0:
+    return {
+      "status": "unchanged",
+      "message": f"ACT table already has the latest uploaded week values. Kept {kept_count} existing values.",
+    }
+
+  xlsx_bytes = output.getvalue()
+  saved, message = write_bytes_to_github(
+    read_secret("ACT_TABLE_GITHUB_PATH") or ACT_TABLE_GITHUB_PATH,
+    xlsx_bytes,
+    f"Update ACT table ({added_count} values)",
+  )
+  return {
+    "status": "saved" if saved else "download",
+    "message": message,
+    "added_count": added_count,
+    "kept_count": kept_count,
+    "xlsx_bytes": xlsx_bytes,
+  }
+
 
 def remember_activation_snapshot(parsed: dict) -> dict:
   updates = activation_updates_from_parsed(parsed)
@@ -703,8 +1039,10 @@ def remember_activation_snapshot(parsed: dict) -> dict:
 
   merged_history, added_count, changed_count = merge_activation_history(updates)
   store = activation_history_store()
+  act_table_store = load_act_table_store()
   for update in updates:
-    store[(update["source_type"], update["model"], update["week"])] = update["cumulative_activation"]
+    key = (update["source_type"], update["model"], update["week"])
+    store[key] = act_table_store.get(key, update["cumulative_activation"])
 
   csv_text = activation_history_csv_text(merged_history)
   if added_count == 0 and changed_count == 0:
@@ -718,6 +1056,10 @@ def remember_activation_snapshot(parsed: dict) -> dict:
     "changed_count": changed_count,
     "csv_text": csv_text,
   }
+
+
+def remember_act_table_snapshot(parsed: dict) -> dict:
+  return update_act_table_workbook(activation_updates_from_parsed(parsed))
 
 
 def selected_filters(records: list[dict]) -> dict[str, list[str]]:
@@ -785,10 +1127,9 @@ def filter_snapshot_summary(filters: dict[str, list[str]]) -> str:
     label = FILTER_LABELS[key]
     preview = ", ".join(values[:2])
     if len(values) > 2:
-      preview = f"{preview}，另 {len(values) - 2} 個"
+      preview = f"{preview}, +{len(values) - 2} more"
     parts.append(f"{label}: {preview}")
   return " | ".join(parts) if parts else "All records"
-
 
 def filter_snapshot_details(filters: dict[str, list[str]]) -> pd.DataFrame:
   rows = []
@@ -826,27 +1167,53 @@ def render_activation_history_status(result: dict):
   changed_count = result.get("changed_count", 0)
 
   if status == "saved":
-    st.success(
-      f"ACT 記錄已保存：新增 {added_count} 筆，更新 {changed_count} 筆。{message}"
-    )
+    st.success(f"ACT CSV history saved: added {added_count}, changed {changed_count}. {message}")
     return
   if status == "unchanged":
-    st.info("本次上傳的 ACT 記錄已經是最新。")
+    st.info("ACT CSV history is already up to date.")
     return
   if status == "skipped":
-    st.info(message or "本次上傳沒有需要更新的 ACT 記錄。")
+    st.info(message or "No ACT values were found for CSV history.")
     return
   if status == "download":
     st.warning(
-      f"ACT 記錄已在本次畫面更新，但尚未自動永久保存。{message}請下載更新後的 CSV，或請管理者補上 GitHub token 設定。"
+      f"ACT CSV history was updated in this session but was not saved to GitHub. {message} "
+      "Download the CSV if you still need the legacy history file."
     )
     st.download_button(
-      "下載更新後的 activation_history.csv",
+      "Download updated activation_history.csv",
       data=result.get("csv_text", ""),
       file_name="activation_history.csv",
       mime="text/csv",
     )
 
+
+def render_act_table_status(result: dict):
+  status = result.get("status")
+  message = result.get("message", "")
+  added_count = result.get("added_count", 0)
+  kept_count = result.get("kept_count", 0)
+
+  if status == "saved":
+    st.success(f"ACT table saved: added {added_count} values, kept {kept_count} existing values. {message}")
+    return
+  if status == "unchanged":
+    st.info(message or "ACT table already has the latest uploaded week values.")
+    return
+  if status == "skipped":
+    st.info(message or "No ACT values were found for ACT table update.")
+    return
+  if status == "download":
+    st.warning(
+      f"ACT table was updated in this session but was not saved to GitHub. {message} "
+      "Download the updated workbook and replace ACT table.xlsx if needed."
+    )
+    st.download_button(
+      "Download updated ACT table.xlsx",
+      data=result.get("xlsx_bytes", b""),
+      file_name="ACT table.xlsx",
+      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 def activation_trend_values(records: list[dict], filters: dict[str, list[str]], max_points: int = 12) -> list[int]:
   store = activation_history_store()
@@ -1167,10 +1534,10 @@ def model_scope_for_filters(records: list[dict], filters: dict[str, list[str]]) 
     {
       (
         normalize_source_type(record.get("source_type", "")),
-        str(record.get("ORG_MODEL(PRODUCT_DESC)", "")).strip(),
+        act_model_from_record(record),
       )
       for record in scope_records
-      if str(record.get("ORG_MODEL(PRODUCT_DESC)", "")).strip()
+      if act_model_from_record(record)
     }
   )
 
@@ -1749,14 +2116,14 @@ def render_change_log():
     <div class="change-log">
       <h3>Site Change Log</h3>
       <ol>
-        <li><strong>2026-06-11</strong> CFR Watch Board 初次上板：上傳 Gaming / PC NB raw data，建立 KPI、Trend、Pareto、Heatmap 與 Top items。</li>
-        <li><strong>2026-06-12</strong> Streamlit POC 與視覺優化：調整 filter、Pareto、Heatmap 顏色與圖表標籤。</li>
-        <li><strong>2026-06-15</strong> 資料解析強化：改善 upload feedback、支援 2025 CFR workbook、ACT summary model prefix match。</li>
-        <li><strong>2026-06-26</strong> 新增 ACTION_DESC 結果洞察：Top cards、Pareto 與明細表，跟現有篩選器連動。</li>
-        <li><strong>2026-07-09</strong> 新增 ACT seed history 與 Cumulative CFR Trend，並將趨勢圖時間軸簡化為週別標籤。</li>
-        <li><strong>2026-07-10</strong> 新增上傳後自動擷取 ACT 並寫回 activation_history.csv 的流程；未設定 GitHub token 時提供 CSV 下載備援。</li>
-        <li><strong>2026-07-11</strong> 新增 Target Hit Rate 達標率 KPI，依篩選後 SUMMARY_IEC 的 CFR(A) for model 與 Target 比較達標/超標機型，並避免誤抓 Series CFR(A) Average。</li>
-        <li><strong>2026-07-13</strong> 新增 Group CFR Compare 獨立模式，可用篩選器建立 G1/G2 群組並比較多條 Cumulative CFR 趨勢線；同步將模式切換改為 Analysis Mode 區塊與選中按鈕高亮。群組數量建議以 2-4 組為主，超過 4 組時線圖、legend 與顏色辨識度會下降；目前提供 6 色循環顯示。GOG 介面新增左右分區、scope 展開明細、重複群組防呆、判讀卡、WoW/Gap/Alert 欄位，以及 Cumulative CFR / Weekly Failure Qty 圖表切換。</li>
+        <li><strong>2026-06-11</strong> CFR Watch Board ?活銝嚗???Gaming / PC NB raw data嚗遣蝡?KPI?rend?areto?eatmap ??Top items??/li>
+        <li><strong>2026-06-12</strong> Streamlit POC ??閬箏??隤踵 filter?areto?eatmap 憿??銵冽?蝐扎?/li>
+        <li><strong>2026-06-15</strong> 鞈?閫??撘瑕?嚗??upload feedback???2025 CFR workbook?CT summary model prefix match??/li>
+        <li><strong>2026-06-26</strong> ?啣? ACTION_DESC 蝯?瘣?嚗op cards?areto ??蝝啗”嚗??暹?蝭拚?券????/li>
+        <li><strong>2026-07-09</strong> ?啣? ACT seed history ??Cumulative CFR Trend嚗蒂撠隅?Ｗ???頠貊陛??勗璅惜??/li>
+        <li><strong>2026-07-10</strong> ?啣?銝敺???ACT 銝血神??activation_history.csv ??蝔??芾身摰?GitHub token ??靘?CSV 銝????/li>
+        <li><strong>2026-07-11</strong> ?啣? Target Hit Rate ????KPI嚗?蝭拚敺?SUMMARY_IEC ??CFR(A) for model ??Target 瘥???/頞?璈?嚗蒂?踹?隤斗? Series CFR(A) Average??/li>
+        <li><strong>2026-07-13</strong> ?啣? Group CFR Compare ?函?璅∪?嚗?函祟?詨撱箇? G1/G2 蝢斤?銝行?頛?璇?Cumulative CFR 頞典蝺??郊撠芋撘????Analysis Mode ?憛??訾葉??擃漁?黎蝯?遣霅唬誑 2-4 蝯銝鳴?頞? 4 蝯?蝺??egend ???脰儘霅漲?????桀??? 6 ?脣儐?圈＊蝷箝OG 隞?啣?撌血???cope 撅??敦??銴黎蝯?霈?～oW/Gap/Alert 甈?嚗誑??Cumulative CFR / Weekly Failure Qty ?”????/li>
       </ol>
     </div>
     """,
@@ -1822,7 +2189,9 @@ def main():
     return
 
   activation_history_result = remember_activation_snapshot(parsed)
+  act_table_result = remember_act_table_snapshot(parsed)
   render_file_summary(parsed)
+  render_act_table_status(act_table_result)
   render_activation_history_status(activation_history_result)
 
   view_mode = render_mode_selector()
@@ -1872,4 +2241,8 @@ def main():
 
 if __name__ == "__main__":
   main()
+
+
+
+
 

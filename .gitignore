@@ -5,6 +5,7 @@ __pycache__/
 *.tmp
 *.log
 *.xlsx
+!ACT table.xlsx
 *.xlsm
 *.xls
 cfr_upload_debug.html

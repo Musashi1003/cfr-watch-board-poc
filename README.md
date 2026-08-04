@@ -133,4 +133,22 @@ ACT_HISTORY_GITHUB_BRANCH = "main"
 
 If `ACT_HISTORY_GITHUB_TOKEN` is not configured, uploaded ACT values are still available in the current session and the app will offer an updated `activation_history.csv` download, but Streamlit restarts will not preserve those new rows automatically.
 
+### ACT table maintenance
+
+`ACT table.xlsx` is the preferred ACT database when it is available. The app reads this workbook before falling back to `data/activation_history.csv`, so manually maintained ACT values remain the source of truth.
+
+- `2025 ACT` uses `MODEL_GROUP` as the model key.
+- `2026 ACT` uses `ORG_MODEL(PRODUCT_DESC)` as the model key.
+- The app decides which sheet to use from the raw-data `開賣年度` column.
+- Existing week/model values in `ACT table.xlsx` are preserved and not overwritten by CFR-derived estimates.
+- Missing latest-week values are calculated from the uploaded workbook and written into the ACT table update.
+
+To let Streamlit Cloud save `ACT table.xlsx` back to GitHub, use the same token settings above and optionally set:
+
+```toml
+ACT_TABLE_GITHUB_PATH = "ACT table.xlsx"
+```
+
+If GitHub write access is not configured, the page offers an updated `ACT table.xlsx` download after upload.
+
 This is a POC control layer only. For formal production use, use Streamlit private viewer settings, company SSO, Azure Web App authentication, or an internal server approved by IT.
