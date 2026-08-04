@@ -2111,19 +2111,27 @@ def render_parse_diagnostics(parsed: dict):
 
 
 def render_change_log():
+  entries = [
+    ("2026-06-11", "CFR Watch Board initial release: uploaded Gaming / PC NB raw data and added KPI, trend, Pareto, heatmap, and top item views."),
+    ("2026-06-12", "Streamlit POC visual tuning: improved filters, Pareto, heatmap colors, and chart labels."),
+    ("2026-06-15", "Parser hardening: improved upload feedback, supported 2025 CFR workbook data, and added ACT summary model prefix matching."),
+    ("2026-06-26", "Added ACTION_DESC result insights with top cards, Pareto, and detail table linked to current filters."),
+    ("2026-07-09", "Added ACT seed history and Cumulative CFR Trend, with week labels simplified on the time axis."),
+    ("2026-07-10", "Added automatic ACT extraction after upload, GitHub-backed activation_history.csv updates, and CSV download fallback."),
+    ("2026-07-11", "Added Target Hit Rate KPI using SUMMARY_IEC CFR(A) for model versus Target, while avoiding Series CFR(A) Average."),
+    ("2026-07-13", "Added Group CFR Compare mode with G1/G2 scopes, duplicate-group checks, WoW/Gap/Alert fields, and chart metric switching."),
+    ("2026-08-04", "Added ACT table persistence: 2025 ACT uses MODEL_GROUP, 2026 ACT uses ORG_MODEL(PRODUCT_DESC), existing ACT table values are preserved, and the Site Change Log encoding was repaired."),
+  ]
+  items = "\n".join(
+    f"<li><strong>{html_escape(date)}</strong> {html_escape(message)}</li>"
+    for date, message in entries
+  )
   st.markdown(
-    """
+    f"""
     <div class="change-log">
       <h3>Site Change Log</h3>
       <ol>
-        <li><strong>2026-06-11</strong> CFR Watch Board ?活銝嚗???Gaming / PC NB raw data嚗遣蝡?KPI?rend?areto?eatmap ??Top items??/li>
-        <li><strong>2026-06-12</strong> Streamlit POC ??閬箏??隤踵 filter?areto?eatmap 憿??銵冽?蝐扎?/li>
-        <li><strong>2026-06-15</strong> 鞈?閫??撘瑕?嚗??upload feedback???2025 CFR workbook?CT summary model prefix match??/li>
-        <li><strong>2026-06-26</strong> ?啣? ACTION_DESC 蝯?瘣?嚗op cards?areto ??蝝啗”嚗??暹?蝭拚?券????/li>
-        <li><strong>2026-07-09</strong> ?啣? ACT seed history ??Cumulative CFR Trend嚗蒂撠隅?Ｗ???頠貊陛??勗璅惜??/li>
-        <li><strong>2026-07-10</strong> ?啣?銝敺???ACT 銝血神??activation_history.csv ??蝔??芾身摰?GitHub token ??靘?CSV 銝????/li>
-        <li><strong>2026-07-11</strong> ?啣? Target Hit Rate ????KPI嚗?蝭拚敺?SUMMARY_IEC ??CFR(A) for model ??Target 瘥???/頞?璈?嚗蒂?踹?隤斗? Series CFR(A) Average??/li>
-        <li><strong>2026-07-13</strong> ?啣? Group CFR Compare ?函?璅∪?嚗?函祟?詨撱箇? G1/G2 蝢斤?銝行?頛?璇?Cumulative CFR 頞典蝺??郊撠芋撘????Analysis Mode ?憛??訾葉??擃漁?黎蝯?遣霅唬誑 2-4 蝯銝鳴?頞? 4 蝯?蝺??egend ???脰儘霅漲?????桀??? 6 ?脣儐?圈＊蝷箝OG 隞?啣?撌血???cope 撅??敦??銴黎蝯?霈?～oW/Gap/Alert 甈?嚗誑??Cumulative CFR / Weekly Failure Qty ?”????/li>
+        {items}
       </ol>
     </div>
     """,
