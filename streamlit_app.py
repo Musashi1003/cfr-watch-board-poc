@@ -1830,21 +1830,44 @@ def group_launch_years(records: list[dict], filters: dict[str, list[str]]) -> se
   }
 
 
+def group_launch_year(records: list[dict], filters: dict[str, list[str]]) -> str | None:
+  years = group_launch_years(records, filters)
+  if len(years) != 1:
+    return None
+  return next(iter(years))
+
+
 def should_use_relative_week_axis(records: list[dict], groups: list[dict]) -> bool:
-  group_year_sets = [
-    group_launch_years(records, group.get("filters", {}))
+  group_years = [
+    group_launch_year(records, group.get("filters", {}))
     for group in groups
   ]
-  single_years = [next(iter(years)) for years in group_year_sets if len(years) == 1]
-  if len(single_years) != len(groups):
+  if any(year is None for year in group_years):
     return False
-  return len(set(single_years)) > 1
+  return len(set(group_years)) > 1
 
 
-def add_relative_week_axis(trend: pd.DataFrame) -> pd.DataFrame:
+def launch_year_week_index(week: str, launch_year: str | None) -> int | None:
+  match = re.search(r"W?(\d{2})(\d{2})", week or "")
+  if not match or not launch_year:
+    return None
+  week_year = 2000 + int(match.group(1))
+  week_number = int(match.group(2))
+  launch_year_number = int(launch_year)
+  return ((week_year - launch_year_number) * 52) + week_number
+
+
+def add_relative_week_axis(trend: pd.DataFrame, launch_year: str | None = None) -> pd.DataFrame:
   trend = trend.sort_values("end_week", key=lambda series: series.map(week_sort_key)).reset_index(drop=True)
-  trend["relative_week_index"] = range(1, len(trend) + 1)
-  trend["relative_week_label"] = trend["relative_week_index"].map(lambda value: f"WK{value:02d}")
+  if launch_year:
+    trend["relative_week_index"] = trend["end_week"].map(
+      lambda week: launch_year_week_index(week, launch_year)
+    )
+  else:
+    trend["relative_week_index"] = range(1, len(trend) + 1)
+  trend["relative_week_label"] = trend["relative_week_index"].map(
+    lambda value: f"WK{int(value):02d}" if value is not None and not pd.isna(value) else ""
+  )
   return trend
 
 
@@ -1951,6 +1974,7 @@ def render_group_compare(records: list[dict]):
   if not groups:
     return
 
+  use_relative_week_axis = should_use_relative_week_axis(records, groups)
   trend_frames = []
   skipped = []
   for index, group in enumerate(groups):
@@ -1958,7 +1982,8 @@ def render_group_compare(records: list[dict]):
     if trend.empty:
       skipped.append(f"{group['label']}: {message}")
       continue
-    trend = add_relative_week_axis(trend.copy())
+    axis_launch_year = group_launch_year(records, group.get("filters", {})) if use_relative_week_axis else None
+    trend = add_relative_week_axis(trend.copy(), axis_launch_year)
     trend["group"] = group["label"]
     trend["group_order"] = index
     trend_frames.append(trend)
@@ -1988,10 +2013,9 @@ def render_group_compare(records: list[dict]):
     domain=[group["label"] for group in groups],
     range=color_range,
   )
-  use_relative_week_axis = should_use_relative_week_axis(records, groups)
   if use_relative_week_axis:
     x_field = "relative_week_label:N"
-    x_title = "Relative Week"
+    x_title = "Launch Year Week"
     x_sort = sorted(trend_all["relative_week_label"].dropna().unique(), key=relative_week_label_sort_key)
   else:
     x_field = "end_week:N"
@@ -2002,7 +2026,7 @@ def render_group_compare(records: list[dict]):
     y_axis = alt.Axis(title=None, format=",.0f")
     tooltips = [
       alt.Tooltip("group:N", title="Group"),
-      alt.Tooltip("relative_week_label:N", title="Relative Week"),
+      alt.Tooltip("relative_week_label:N", title="Launch Year Week"),
       alt.Tooltip("end_week:N", title="Week"),
       alt.Tooltip("weekly_failure:Q", title="Weekly Failures", format=",.0f"),
       alt.Tooltip("cumulative_failure:Q", title="TTL Failures", format=",.0f"),
@@ -2012,7 +2036,7 @@ def render_group_compare(records: list[dict]):
     y_axis = alt.Axis(title=None, format=".2%")
     tooltips = [
       alt.Tooltip("group:N", title="Group"),
-      alt.Tooltip("relative_week_label:N", title="Relative Week"),
+      alt.Tooltip("relative_week_label:N", title="Launch Year Week"),
       alt.Tooltip("end_week:N", title="Week"),
       alt.Tooltip("cumulative_cfr:Q", title="Cumulative CFR", format=".2%"),
       alt.Tooltip("cumulative_failure:Q", title="TTL Failures", format=",.0f"),
@@ -2275,6 +2299,7 @@ def render_change_log():
     ("2026-08-21", "Made Group CFR Compare and Cumulative CFR Trend year-aware: uploaded rows use launch year to select the matching 2025 ACT or 2026 ACT table values."),
     ("2026-08-21", "Added Launch Year as a selectable filter in Overview Dashboard and Group CFR Compare so groups can be built separately for 2025 ACT and 2026 ACT scopes."),
     ("2026-08-21", "Stopped year-specific CFR lines at each group's own latest uploaded week and aligned cross-year Group CFR Compare charts by relative week WK01, WK02, and onward."),
+    ("2026-08-21", "Changed cross-year Group CFR Compare x-axis to launch-year week indexing, so W2633 is shown as WK33 instead of the 28th plotted data point."),
   ]
   items = "\n".join(
     f"<li><strong>{html_escape(date)}</strong> {html_escape(message)}</li>"
