@@ -1314,11 +1314,15 @@ def activation_trend_values(records: list[dict], filters: dict[str, list[str]], 
   if not store:
     return []
 
+  filtered_records = filtered_records_for_filters(records, filters)
+  if not filtered_records:
+    return []
+
   model_scope = model_scope_for_filters(records, filters)
   if not model_scope:
     return []
 
-  latest_uploaded_week = latest_week_from_records(records)
+  latest_uploaded_week = latest_week_from_records(filtered_records)
   available_weeks = sorted(
     {
       week
@@ -1684,7 +1688,7 @@ def cumulative_cfr_trend_data(records: list[dict], filters: dict[str, list[str]]
     for record in filtered_records
     if str(record.get("Week", "")).strip()
   )
-  latest_uploaded_week = latest_week_from_records(records)
+  latest_uploaded_week = latest_week_from_records(filtered_records)
   available_weeks = sorted(
     {
       week
@@ -1818,6 +1822,37 @@ def group_latest_rows(trend_all: pd.DataFrame) -> list[dict]:
   return rows
 
 
+def group_launch_years(records: list[dict], filters: dict[str, list[str]]) -> set[str]:
+  return {
+    launch_year_from_record(record)
+    for record in filtered_records_for_filters(records, filters)
+    if launch_year_from_record(record)
+  }
+
+
+def should_use_relative_week_axis(records: list[dict], groups: list[dict]) -> bool:
+  group_year_sets = [
+    group_launch_years(records, group.get("filters", {}))
+    for group in groups
+  ]
+  single_years = [next(iter(years)) for years in group_year_sets if len(years) == 1]
+  if len(single_years) != len(groups):
+    return False
+  return len(set(single_years)) > 1
+
+
+def add_relative_week_axis(trend: pd.DataFrame) -> pd.DataFrame:
+  trend = trend.sort_values("end_week", key=lambda series: series.map(week_sort_key)).reset_index(drop=True)
+  trend["relative_week_index"] = range(1, len(trend) + 1)
+  trend["relative_week_label"] = trend["relative_week_index"].map(lambda value: f"WK{value:02d}")
+  return trend
+
+
+def relative_week_label_sort_key(label: str) -> int:
+  match = re.search(r"(\d+)", str(label or ""))
+  return int(match.group(1)) if match else 0
+
+
 def pp(value: float | None) -> str:
   if value is None:
     return "N/A"
@@ -1923,7 +1958,7 @@ def render_group_compare(records: list[dict]):
     if trend.empty:
       skipped.append(f"{group['label']}: {message}")
       continue
-    trend = trend.copy()
+    trend = add_relative_week_axis(trend.copy())
     trend["group"] = group["label"]
     trend["group_order"] = index
     trend_frames.append(trend)
@@ -1953,12 +1988,21 @@ def render_group_compare(records: list[dict]):
     domain=[group["label"] for group in groups],
     range=color_range,
   )
-  week_order = sorted(trend_all["end_week"].dropna().unique(), key=week_sort_key)
+  use_relative_week_axis = should_use_relative_week_axis(records, groups)
+  if use_relative_week_axis:
+    x_field = "relative_week_label:N"
+    x_title = "Relative Week"
+    x_sort = sorted(trend_all["relative_week_label"].dropna().unique(), key=relative_week_label_sort_key)
+  else:
+    x_field = "end_week:N"
+    x_title = None
+    x_sort = sorted(trend_all["end_week"].dropna().unique(), key=week_sort_key)
   if chart_metric == "Weekly Failure Qty":
     y_field = "weekly_failure:Q"
     y_axis = alt.Axis(title=None, format=",.0f")
     tooltips = [
       alt.Tooltip("group:N", title="Group"),
+      alt.Tooltip("relative_week_label:N", title="Relative Week"),
       alt.Tooltip("end_week:N", title="Week"),
       alt.Tooltip("weekly_failure:Q", title="Weekly Failures", format=",.0f"),
       alt.Tooltip("cumulative_failure:Q", title="TTL Failures", format=",.0f"),
@@ -1968,6 +2012,7 @@ def render_group_compare(records: list[dict]):
     y_axis = alt.Axis(title=None, format=".2%")
     tooltips = [
       alt.Tooltip("group:N", title="Group"),
+      alt.Tooltip("relative_week_label:N", title="Relative Week"),
       alt.Tooltip("end_week:N", title="Week"),
       alt.Tooltip("cumulative_cfr:Q", title="Cumulative CFR", format=".2%"),
       alt.Tooltip("cumulative_failure:Q", title="TTL Failures", format=",.0f"),
@@ -1978,7 +2023,7 @@ def render_group_compare(records: list[dict]):
     alt.Chart(trend_all)
     .mark_line(point=True, strokeWidth=2.8)
     .encode(
-      x=alt.X("end_week:N", axis=alt.Axis(labelAngle=-35, title=None), sort=week_order),
+      x=alt.X(x_field, axis=alt.Axis(labelAngle=-35, title=x_title), sort=x_sort),
       y=alt.Y(y_field, axis=y_axis),
       color=alt.Color("group:N", scale=color_scale, legend=alt.Legend(title="Group")),
       tooltip=tooltips,
@@ -2229,6 +2274,7 @@ def render_change_log():
     ("2026-08-21", "Backfilled ACT table history for W2631-W2633 from uploaded weekly raw data, added ACT Persistence Guard, and refreshed ACT history cache whenever the ACT table changes."),
     ("2026-08-21", "Made Group CFR Compare and Cumulative CFR Trend year-aware: uploaded rows use launch year to select the matching 2025 ACT or 2026 ACT table values."),
     ("2026-08-21", "Added Launch Year as a selectable filter in Overview Dashboard and Group CFR Compare so groups can be built separately for 2025 ACT and 2026 ACT scopes."),
+    ("2026-08-21", "Stopped year-specific CFR lines at each group's own latest uploaded week and aligned cross-year Group CFR Compare charts by relative week WK01, WK02, and onward."),
   ]
   items = "\n".join(
     f"<li><strong>{html_escape(date)}</strong> {html_escape(message)}</li>"
