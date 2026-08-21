@@ -2121,6 +2121,7 @@ def render_change_log():
     ("2026-07-11", "Added Target Hit Rate KPI using SUMMARY_IEC CFR(A) for model versus Target, while avoiding Series CFR(A) Average."),
     ("2026-07-13", "Added Group CFR Compare mode with G1/G2 scopes, duplicate-group checks, WoW/Gap/Alert fields, and chart metric switching."),
     ("2026-08-04", "Added ACT table persistence: 2025 ACT uses MODEL_GROUP, 2026 ACT uses ORG_MODEL(PRODUCT_DESC), existing ACT table values are preserved, and the Site Change Log encoding was repaired."),
+    ("2026-08-21", "Backfilled ACT table history for W2631-W2633 from uploaded weekly raw data and confirmed GitHub token configuration is required for future automatic persistence."),
   ]
   items = "\n".join(
     f"<li><strong>{html_escape(date)}</strong> {html_escape(message)}</li>"
