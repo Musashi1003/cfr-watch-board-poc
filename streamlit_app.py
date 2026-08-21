@@ -68,7 +68,7 @@ GROUP_COMPARE_COLORS = [
 ]
 PARSE_CACHE_VERSION = "2026-08-21-act-cache-signature"
 ACTIVATION_HISTORY_PATH = Path(__file__).resolve().parent / "data" / "activation_history.csv"
-ACTIVATION_HISTORY_COLUMNS = ["source_type", "model", "week", "cumulative_activation", "source"]
+ACTIVATION_HISTORY_COLUMNS = ["source_type", "launch_year", "model", "week", "cumulative_activation", "source"]
 ACTIVATION_HISTORY_GITHUB_PATH = "data/activation_history.csv"
 ACT_TABLE_PATH = Path(__file__).resolve().parent / "ACT table.xlsx"
 ACT_TABLE_GITHUB_PATH = "ACT table.xlsx"
@@ -636,12 +636,12 @@ def numeric_activation(value) -> float | None:
     return None
 
 
-def load_act_table_store() -> dict[tuple[str, str, str], float]:
+def load_act_table_store() -> dict[tuple[str, str, str, str], float]:
   path = configured_act_table_path()
   if not path.exists():
     return {}
 
-  store: dict[tuple[str, str, str], float] = {}
+  store: dict[tuple[str, str, str, str], float] = {}
   workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
   try:
     for worksheet in workbook.worksheets:
@@ -667,29 +667,35 @@ def load_act_table_store() -> dict[tuple[str, str, str], float]:
       if not week_indices:
         continue
 
+      sheet_launch_year = clean_launch_year(worksheet.title)
+      year_index = 0 if headers and ("年度" in headers[0] or "YEAR" in headers[0].upper()) else None
       for row in worksheet.iter_rows(min_row=2, values_only=True):
         source_type = normalize_source_type(row[source_index] if source_index < len(row) else "")
+        launch_year = sheet_launch_year
+        if year_index is not None and year_index < len(row):
+          launch_year = clean_launch_year(row[year_index]) or launch_year
         model = str(row[model_index] if model_index < len(row) else "").strip()
-        if not source_type or not model:
+        if not source_type or not launch_year or not model:
           continue
         for week_index, week in week_indices:
           activation = numeric_activation(row[week_index] if week_index < len(row) else None)
           if activation is None:
             continue
-          store[(source_type, model, week.upper())] = activation
+          store[(source_type, launch_year, model, week.upper())] = activation
   finally:
     workbook.close()
   return store
 
 
 @st.cache_resource
-def activation_history_store_cached(cache_signature: tuple) -> dict[tuple[str, str, str], float]:
+def activation_history_store_cached(cache_signature: tuple) -> dict[tuple[str, str, str, str], float]:
   _ = cache_signature
-  store: dict[tuple[str, str, str], float] = {}
+  store: dict[tuple[str, str, str, str], float] = {}
   if ACTIVATION_HISTORY_PATH.exists():
     history = pd.read_csv(ACTIVATION_HISTORY_PATH)
     for row in history.to_dict("records"):
       source_type = normalize_source_type(row.get("source_type", ""))
+      launch_year = clean_launch_year(row.get("launch_year", ""))
       model = str(row.get("model", "")).strip()
       week = str(row.get("week", "")).strip()
       if not model or not week:
@@ -698,13 +704,13 @@ def activation_history_store_cached(cache_signature: tuple) -> dict[tuple[str, s
         activation = float(row.get("cumulative_activation", 0) or 0)
       except (TypeError, ValueError):
         activation = 0.0
-      store[(source_type, model, week)] = activation
+      store[(source_type, launch_year, model, week)] = activation
 
   store.update(load_act_table_store())
   return store
 
 
-def activation_history_store() -> dict[tuple[str, str, str], float]:
+def activation_history_store() -> dict[tuple[str, str, str, str], float]:
   return activation_history_store_cached(act_store_cache_signature())
 
 
@@ -769,20 +775,22 @@ def merge_activation_history(updates: list[dict]) -> tuple[pd.DataFrame, int, in
   existing_index = {
     (
       normalize_source_type(row["source_type"]),
+      clean_launch_year(row.get("launch_year", "")),
       str(row["model"]).strip(),
       str(row["week"]).strip(),
     ): index
     for index, row in history.iterrows()
   }
 
-  for (source_type, model, week), activation in activation_history_store().items():
-    key = (source_type, model, week)
+  for (source_type, launch_year, model, week), activation in activation_history_store().items():
+    key = (source_type, launch_year, model, week)
     activation_text = format_activation_value(activation)
     if key in existing_index:
       history.at[existing_index[key], "cumulative_activation"] = activation_text
       continue
     history.loc[len(history)] = {
       "source_type": source_type,
+      "launch_year": launch_year,
       "model": model,
       "week": week,
       "cumulative_activation": activation_text,
@@ -794,7 +802,7 @@ def merge_activation_history(updates: list[dict]) -> tuple[pd.DataFrame, int, in
   changed_count = 0
   act_table_store = load_act_table_store()
   for update in updates:
-    key = (update["source_type"], update["model"], update["week"])
+    key = (update["source_type"], update["launch_year"], update["model"], update["week"])
     if key in act_table_store:
       activation_text = format_activation_value(act_table_store[key])
       if key in existing_index:
@@ -804,6 +812,7 @@ def merge_activation_history(updates: list[dict]) -> tuple[pd.DataFrame, int, in
       else:
         history.loc[len(history)] = {
           "source_type": update["source_type"],
+          "launch_year": update["launch_year"],
           "model": update["model"],
           "week": update["week"],
           "cumulative_activation": activation_text,
@@ -824,6 +833,7 @@ def merge_activation_history(updates: list[dict]) -> tuple[pd.DataFrame, int, in
 
     history.loc[len(history)] = {
       "source_type": update["source_type"],
+      "launch_year": update["launch_year"],
       "model": update["model"],
       "week": update["week"],
       "cumulative_activation": activation_text,
@@ -834,7 +844,7 @@ def merge_activation_history(updates: list[dict]) -> tuple[pd.DataFrame, int, in
 
   history["_source_order"] = history["source_type"].map({"PC NB": 0, "Gaming NB": 1}).fillna(9)
   history["_week_order"] = history["week"].map(week_sort_key)
-  history = history.sort_values(["_source_order", "model", "_week_order"]).drop(columns=["_source_order", "_week_order"])
+  history = history.sort_values(["_source_order", "launch_year", "model", "_week_order"]).drop(columns=["_source_order", "_week_order"])
   return history[ACTIVATION_HISTORY_COLUMNS], added_count, changed_count
 
 
@@ -1099,7 +1109,7 @@ def remember_activation_snapshot(parsed: dict) -> dict:
   store = activation_history_store()
   act_table_store = load_act_table_store()
   for update in updates:
-    key = (update["source_type"], update["model"], update["week"])
+    key = (update["source_type"], update["launch_year"], update["model"], update["week"])
     store[key] = act_table_store.get(key, update["cumulative_activation"])
 
   csv_text = activation_history_csv_text(merged_history)
@@ -1310,9 +1320,10 @@ def activation_trend_values(records: list[dict], filters: dict[str, list[str]], 
   available_weeks = sorted(
     {
       week
-      for source_type, model in model_scope
-      for stored_source, stored_model, week in store
+      for source_type, launch_year, model in model_scope
+      for stored_source, stored_year, stored_model, week in store
       if stored_model == model and (stored_source == source_type or source_type == "Uploaded")
+      if stored_year in ("", launch_year)
       if not latest_uploaded_week or week_sort_key(week) <= week_sort_key(latest_uploaded_week)
     },
     key=week_sort_key,
@@ -1321,8 +1332,8 @@ def activation_trend_values(records: list[dict], filters: dict[str, list[str]], 
   values = []
   for week in available_weeks:
     activation_values = [
-      activation_for_model_week(store, source_type, model, week)
-      for source_type, model in model_scope
+      activation_for_model_week(store, source_type, launch_year, model, week)
+      for source_type, launch_year, model in model_scope
     ]
     valid_values = [value for value in activation_values if value is not None]
     if valid_values:
@@ -1610,34 +1621,38 @@ def act_scope_records_for_filters(records: list[dict], filters: dict[str, list[s
   return filtered_records_for_filters(records, act_filters)
 
 
-def model_scope_for_filters(records: list[dict], filters: dict[str, list[str]]) -> list[tuple[str, str]]:
+def model_scope_for_filters(records: list[dict], filters: dict[str, list[str]]) -> list[tuple[str, str, str]]:
   scope_records = act_scope_records_for_filters(records, filters)
   return sorted(
     {
       (
         normalize_source_type(record.get("source_type", "")),
+        launch_year_from_record(record),
         act_model_from_record(record),
       )
       for record in scope_records
-      if act_model_from_record(record)
+      if launch_year_from_record(record) and act_model_from_record(record)
     }
   )
 
 
 def activation_for_model_week(
-  store: dict[tuple[str, str, str], float],
+  store: dict[tuple[str, str, str, str], float],
   source_type: str,
+  launch_year: str,
   model: str,
   week: str,
 ) -> float | None:
-  exact = store.get((source_type, model, week))
+  exact = store.get((source_type, launch_year, model, week))
   if exact is not None:
     return exact
 
   fallback_values = [
     value
-    for (stored_source, stored_model, stored_week), value in store.items()
+    for (stored_source, stored_year, stored_model, stored_week), value in store.items()
     if stored_model == model and stored_week == week
+    if stored_year in ("", launch_year)
+    if stored_source == source_type or source_type == "Uploaded"
   ]
   if not fallback_values:
     return None
@@ -1666,9 +1681,10 @@ def cumulative_cfr_trend_data(records: list[dict], filters: dict[str, list[str]]
   available_weeks = sorted(
     {
       week
-      for source_type, model in model_scope
-      for stored_source, stored_model, week in store
+      for source_type, launch_year, model in model_scope
+      for stored_source, stored_year, stored_model, week in store
       if stored_model == model and (stored_source == source_type or source_type == "Uploaded")
+      if stored_year in ("", launch_year)
       if not latest_uploaded_week or week_sort_key(week) <= week_sort_key(latest_uploaded_week)
     },
     key=week_sort_key,
@@ -1679,8 +1695,8 @@ def cumulative_cfr_trend_data(records: list[dict], filters: dict[str, list[str]]
   cumulative_activation_by_week = {}
   for week in available_weeks:
     activation_values = [
-      activation_for_model_week(store, source_type, model, week)
-      for source_type, model in model_scope
+      activation_for_model_week(store, source_type, launch_year, model, week)
+      for source_type, launch_year, model in model_scope
     ]
     valid_values = [value for value in activation_values if value is not None]
     cumulative_activation_by_week[week] = sum(valid_values) if valid_values else None
@@ -2204,6 +2220,7 @@ def render_change_log():
     ("2026-07-13", "Added Group CFR Compare mode with G1/G2 scopes, duplicate-group checks, WoW/Gap/Alert fields, and chart metric switching."),
     ("2026-08-04", "Added ACT table persistence: 2025 ACT uses MODEL_GROUP, 2026 ACT uses ORG_MODEL(PRODUCT_DESC), existing ACT table values are preserved, and the Site Change Log encoding was repaired."),
     ("2026-08-21", "Backfilled ACT table history for W2631-W2633 from uploaded weekly raw data, added ACT Persistence Guard, and refreshed ACT history cache whenever the ACT table changes."),
+    ("2026-08-21", "Made Group CFR Compare and Cumulative CFR Trend year-aware: uploaded rows use launch year to select the matching 2025 ACT or 2026 ACT table values."),
   ]
   items = "\n".join(
     f"<li><strong>{html_escape(date)}</strong> {html_escape(message)}</li>"
