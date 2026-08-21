@@ -66,7 +66,7 @@ GROUP_COMPARE_COLORS = [
   "#b35c00",
   "#0f6fbd",
 ]
-PARSE_CACHE_VERSION = "2026-06-26-action-desc-v2"
+PARSE_CACHE_VERSION = "2026-08-21-act-cache-signature"
 ACTIVATION_HISTORY_PATH = Path(__file__).resolve().parent / "data" / "activation_history.csv"
 ACTIVATION_HISTORY_COLUMNS = ["source_type", "model", "week", "cumulative_activation", "source"]
 ACTIVATION_HISTORY_GITHUB_PATH = "data/activation_history.csv"
@@ -74,7 +74,7 @@ ACT_TABLE_PATH = Path(__file__).resolve().parent / "ACT table.xlsx"
 ACT_TABLE_GITHUB_PATH = "ACT table.xlsx"
 DEFAULT_GITHUB_REPO = "Musashi1003/cfr-watch-board-poc"
 DEFAULT_GITHUB_BRANCH = "main"
-APP_SESSION_VERSION = "2026-07-17-session-reset"
+APP_SESSION_VERSION = "2026-08-21-act-cache-signature"
 
 
 def week_sort_key(week: str) -> tuple[int, int, str]:
@@ -606,6 +606,22 @@ def configured_act_table_path() -> Path:
   return ACT_TABLE_PATH
 
 
+def file_signature(path: Path) -> tuple[str, int, int] | None:
+  try:
+    stat = path.stat()
+  except OSError:
+    return None
+  return (str(path), int(stat.st_mtime), int(stat.st_size))
+
+
+def act_store_cache_signature() -> tuple:
+  return (
+    file_signature(ACTIVATION_HISTORY_PATH),
+    file_signature(configured_act_table_path()),
+    APP_SESSION_VERSION,
+  )
+
+
 def numeric_activation(value) -> float | None:
   if value is None or value == "":
     return None
@@ -667,7 +683,8 @@ def load_act_table_store() -> dict[tuple[str, str, str], float]:
 
 
 @st.cache_resource
-def activation_history_store() -> dict[tuple[str, str, str], float]:
+def activation_history_store_cached(cache_signature: tuple) -> dict[tuple[str, str, str], float]:
+  _ = cache_signature
   store: dict[tuple[str, str, str], float] = {}
   if ACTIVATION_HISTORY_PATH.exists():
     history = pd.read_csv(ACTIVATION_HISTORY_PATH)
@@ -685,6 +702,10 @@ def activation_history_store() -> dict[tuple[str, str, str], float]:
 
   store.update(load_act_table_store())
   return store
+
+
+def activation_history_store() -> dict[tuple[str, str, str], float]:
+  return activation_history_store_cached(act_store_cache_signature())
 
 
 def activation_updates_from_parsed(parsed: dict) -> list[dict]:
@@ -2182,7 +2203,7 @@ def render_change_log():
     ("2026-07-11", "Added Target Hit Rate KPI using SUMMARY_IEC CFR(A) for model versus Target, while avoiding Series CFR(A) Average."),
     ("2026-07-13", "Added Group CFR Compare mode with G1/G2 scopes, duplicate-group checks, WoW/Gap/Alert fields, and chart metric switching."),
     ("2026-08-04", "Added ACT table persistence: 2025 ACT uses MODEL_GROUP, 2026 ACT uses ORG_MODEL(PRODUCT_DESC), existing ACT table values are preserved, and the Site Change Log encoding was repaired."),
-    ("2026-08-21", "Backfilled ACT table history for W2631-W2633 from uploaded weekly raw data and added ACT Persistence Guard so missing GitHub write access is shown before and after upload."),
+    ("2026-08-21", "Backfilled ACT table history for W2631-W2633 from uploaded weekly raw data, added ACT Persistence Guard, and refreshed ACT history cache whenever the ACT table changes."),
   ]
   items = "\n".join(
     f"<li><strong>{html_escape(date)}</strong> {html_escape(message)}</li>"
