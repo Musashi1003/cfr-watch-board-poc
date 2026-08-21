@@ -149,6 +149,11 @@ To let Streamlit Cloud save `ACT table.xlsx` back to GitHub, use the same token 
 ACT_TABLE_GITHUB_PATH = "ACT table.xlsx"
 ```
 
-If GitHub write access is not configured, the page offers an updated `ACT table.xlsx` download after upload.
+The page includes an ACT Persistence Guard:
+
+- Before upload, the sidebar shows whether GitHub write access is configured.
+- After upload, the app checks whether the latest ACT values were already in `ACT table.xlsx`, saved to GitHub, or still require manual action.
+- If GitHub write access is not configured and the upload creates new ACT values, the app shows a red persistence failure message and offers an updated `ACT table.xlsx` download.
+- A weekly upload should be treated as complete only when the ACT status says it was saved or already existed. If the download fallback appears, commit the downloaded `ACT table.xlsx` to GitHub or configure the token before relying on the history.
 
 This is a POC control layer only. For formal production use, use Streamlit private viewer settings, company SSO, Azure Web App authentication, or an internal server approved by IT.

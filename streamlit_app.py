@@ -901,6 +901,26 @@ def write_bytes_to_github(path: str, content: bytes, commit_message: str) -> tup
   return True, f"Saved to GitHub {path} on {branch}."
 
 
+def act_github_write_enabled() -> bool:
+  return bool(read_secret("ACT_HISTORY_GITHUB_TOKEN") or read_secret("GITHUB_TOKEN"))
+
+
+def act_update_weeks(updates: list[dict]) -> list[str]:
+  return sorted(
+    {str(update.get("week", "")).strip() for update in updates if str(update.get("week", "")).strip()},
+    key=week_sort_key,
+  )
+
+
+def act_update_week_label(updates: list[dict]) -> str:
+  weeks = act_update_weeks(updates)
+  if not weeks:
+    return "N/A"
+  if len(weeks) == 1:
+    return weeks[0]
+  return f"{weeks[0]}-{weeks[-1]}"
+
+
 def worksheet_header_map(worksheet) -> dict[str, int]:
   header_row = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
   if not header_row:
@@ -970,7 +990,12 @@ def find_or_create_act_row(worksheet, update: dict, source_column: int, model_co
 
 def update_act_table_workbook(updates: list[dict]) -> dict:
   if not updates:
-    return {"status": "skipped", "message": "No ACT values were found to record."}
+    return {
+      "status": "skipped",
+      "message": "No ACT values were found to record.",
+      "persistence_ok": True,
+      "requires_manual_save": False,
+    }
 
   path = configured_act_table_path()
   if path.exists():
@@ -1015,6 +1040,13 @@ def update_act_table_workbook(updates: list[dict]) -> dict:
     return {
       "status": "unchanged",
       "message": f"ACT table already has the latest uploaded week values. Kept {kept_count} existing values.",
+      "added_count": added_count,
+      "kept_count": kept_count,
+      "generated_count": len(updates),
+      "week_label": act_update_week_label(updates),
+      "github_write_enabled": act_github_write_enabled(),
+      "persistence_ok": True,
+      "requires_manual_save": False,
     }
 
   xlsx_bytes = output.getvalue()
@@ -1028,6 +1060,11 @@ def update_act_table_workbook(updates: list[dict]) -> dict:
     "message": message,
     "added_count": added_count,
     "kept_count": kept_count,
+    "generated_count": len(updates),
+    "week_label": act_update_week_label(updates),
+    "github_write_enabled": act_github_write_enabled(),
+    "persistence_ok": saved,
+    "requires_manual_save": not saved,
     "xlsx_bytes": xlsx_bytes,
   }
 
@@ -1193,20 +1230,32 @@ def render_act_table_status(result: dict):
   message = result.get("message", "")
   added_count = result.get("added_count", 0)
   kept_count = result.get("kept_count", 0)
+  generated_count = result.get("generated_count", 0)
+  week_label = result.get("week_label", "N/A")
 
   if status == "saved":
-    st.success(f"ACT table saved: added {added_count} values, kept {kept_count} existing values. {message}")
+    st.success(
+      f"ACT Persistence Guard passed: {week_label} saved to ACT table "
+      f"({added_count} new values, {kept_count} kept). {message}"
+    )
     return
   if status == "unchanged":
-    st.info(message or "ACT table already has the latest uploaded week values.")
+    st.success(
+      message
+      or f"ACT Persistence Guard passed: {week_label} already exists in ACT table."
+    )
     return
   if status == "skipped":
     st.info(message or "No ACT values were found for ACT table update.")
     return
   if status == "download":
+    st.error(
+      f"ACT Persistence Guard failed: {week_label} generated {added_count} new ACT values "
+      f"from {generated_count} model updates, but they were not permanently saved. {message}"
+    )
     st.warning(
-      f"ACT table was updated in this session but was not saved to GitHub. {message} "
-      "Download the updated workbook and replace ACT table.xlsx if needed."
+      "Download the updated ACT table below and replace `ACT table.xlsx`, or ask the app owner to set "
+      "`ACT_HISTORY_GITHUB_TOKEN` (or `GITHUB_TOKEN`) in Streamlit Secrets so future uploads can save automatically."
     )
     st.download_button(
       "Download updated ACT table.xlsx",
@@ -1214,6 +1263,18 @@ def render_act_table_status(result: dict):
       file_name="ACT table.xlsx",
       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+def render_act_persistence_preflight():
+  if act_github_write_enabled():
+    st.sidebar.success("ACT persistence: GitHub write enabled.")
+    return
+
+  st.sidebar.warning(
+    "ACT persistence: GitHub write token is not configured. "
+    "New ACT weeks can be calculated, but they will not be saved permanently unless the updated ACT table is downloaded and committed."
+  )
+
 
 def activation_trend_values(records: list[dict], filters: dict[str, list[str]], max_points: int = 12) -> list[int]:
   store = activation_history_store()
@@ -2121,7 +2182,7 @@ def render_change_log():
     ("2026-07-11", "Added Target Hit Rate KPI using SUMMARY_IEC CFR(A) for model versus Target, while avoiding Series CFR(A) Average."),
     ("2026-07-13", "Added Group CFR Compare mode with G1/G2 scopes, duplicate-group checks, WoW/Gap/Alert fields, and chart metric switching."),
     ("2026-08-04", "Added ACT table persistence: 2025 ACT uses MODEL_GROUP, 2026 ACT uses ORG_MODEL(PRODUCT_DESC), existing ACT table values are preserved, and the Site Change Log encoding was repaired."),
-    ("2026-08-21", "Backfilled ACT table history for W2631-W2633 from uploaded weekly raw data and confirmed GitHub token configuration is required for future automatic persistence."),
+    ("2026-08-21", "Backfilled ACT table history for W2631-W2633 from uploaded weekly raw data and added ACT Persistence Guard so missing GitHub write access is shown before and after upload."),
   ]
   items = "\n".join(
     f"<li><strong>{html_escape(date)}</strong> {html_escape(message)}</li>"
@@ -2156,6 +2217,7 @@ def main():
     if st.button("Sign out"):
       st.session_state.pop("authenticated", None)
       st.rerun()
+    render_act_persistence_preflight()
 
   uploaded_files = st.file_uploader(
     "Weekly CFR workbooks",
