@@ -36,6 +36,7 @@ st.set_page_config(
 
 
 FILTER_LABELS = {
+  "launch_year": "Launch Year",
   "model": "Model",
   "segment": "Segment",
   "odm_oem": "ODM/OEM",
@@ -44,13 +45,14 @@ FILTER_LABELS = {
 }
 
 FILTER_ORDER = (
+  "launch_year",
   "segment",
   "model",
   "odm_oem",
   "muc_module",
   "problem_mapping",
 )
-ACT_SCOPE_FILTERS = ("segment", "model", "odm_oem")
+ACT_SCOPE_FILTERS = ("launch_year", "segment", "model", "odm_oem")
 
 BAR_COLOR = "#1a9295"
 BAR_LIGHT_COLOR = "#8fd6d5"
@@ -1599,6 +1601,11 @@ def selected_filter_values(value) -> set[str]:
   return {str(item).strip() for item in values if str(item).strip()}
 
 
+def record_filter_value(record: dict, column_name: str) -> str:
+  text = str(record.get(column_name, "") or "").strip()
+  return text if text else "(blank)"
+
+
 def filtered_records_for_filters(records: list[dict], filters: dict[str, list[str]]) -> list[dict]:
   filtered = records
   for filter_key, column_name in FILTER_FIELDS.items():
@@ -1608,7 +1615,7 @@ def filtered_records_for_filters(records: list[dict], filters: dict[str, list[st
     filtered = [
       record
       for record in filtered
-      if (record.get(column_name) or "(blank)") in selected
+      if record_filter_value(record, column_name) in selected
     ]
   return filtered
 
@@ -2221,6 +2228,7 @@ def render_change_log():
     ("2026-08-04", "Added ACT table persistence: 2025 ACT uses MODEL_GROUP, 2026 ACT uses ORG_MODEL(PRODUCT_DESC), existing ACT table values are preserved, and the Site Change Log encoding was repaired."),
     ("2026-08-21", "Backfilled ACT table history for W2631-W2633 from uploaded weekly raw data, added ACT Persistence Guard, and refreshed ACT history cache whenever the ACT table changes."),
     ("2026-08-21", "Made Group CFR Compare and Cumulative CFR Trend year-aware: uploaded rows use launch year to select the matching 2025 ACT or 2026 ACT table values."),
+    ("2026-08-21", "Added Launch Year as a selectable filter in Overview Dashboard and Group CFR Compare so groups can be built separately for 2025 ACT and 2026 ACT scopes."),
   ]
   items = "\n".join(
     f"<li><strong>{html_escape(date)}</strong> {html_escape(message)}</li>"

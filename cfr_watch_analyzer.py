@@ -23,6 +23,7 @@ BREAKDOWN_DIMENSIONS = {
 ACTION_FIELD = "ACTION_DESC"
 
 FILTER_FIELDS = {
+  "launch_year": "開賣年度",
   "model": "ORG_MODEL(PRODUCT_DESC)",
   "segment": "Segment",
   "odm_oem": "ODM_OEM",
@@ -30,7 +31,7 @@ FILTER_FIELDS = {
   "problem_mapping": "PROBLEM_Mapping",
 }
 
-ACT_SCOPE_FILTER_KEYS = ("segment", "model", "odm_oem")
+ACT_SCOPE_FILTER_KEYS = ("launch_year", "segment", "model", "odm_oem")
 
 RAW_SHEET_NAME = "raw data"
 SUMMARY_SHEET_NAME = "SUMMARY_IEC"
@@ -350,7 +351,7 @@ def dataset_options(records: list[dict], filters: dict | None = None) -> dict[st
       if key != option_key
     }
     related_records = _apply_filters(records, related_filters)
-    counter = Counter(record.get(column_name, "") or "(blank)" for record in related_records)
+    counter = Counter(_filter_value(record.get(column_name, "")) for record in related_records)
     selected = _selected_values(filters.get(option_key, ""))
     for value in selected:
       if value not in counter:
@@ -373,6 +374,11 @@ def _selected_values(value) -> set[str]:
   }
 
 
+def _filter_value(value) -> str:
+  text = str(value or "").strip()
+  return text if text else "(blank)"
+
+
 def _apply_filters(records: list[dict], filters: dict) -> list[dict]:
   filtered = records
   for filter_key, column_name in FILTER_FIELDS.items():
@@ -382,7 +388,7 @@ def _apply_filters(records: list[dict], filters: dict) -> list[dict]:
     filtered = [
       record
       for record in filtered
-      if (record.get(column_name) or "(blank)") in selected
+      if _filter_value(record.get(column_name, "")) in selected
     ]
   return filtered
 
