@@ -355,8 +355,21 @@ def build_summary(rows: list[dict], year: int, month: int, input_name: str, used
 def find_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = []
     if bold:
-        candidates.extend([r"C:\Windows\Fonts\msjhbd.ttc", r"C:\Windows\Fonts\msjhb.ttc", r"C:\Windows\Fonts\segoeuib.ttf"])
-    candidates.extend([r"C:\Windows\Fonts\msjh.ttc", r"C:\Windows\Fonts\segoeui.ttf"])
+        candidates.extend([
+            r"C:\Windows\Fonts\msjhbd.ttc",
+            r"C:\Windows\Fonts\msjhb.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJKtc-Bold.otf",
+            "/usr/share/fonts/truetype/noto/NotoSansTC-Bold.ttf",
+            r"C:\Windows\Fonts\segoeuib.ttf",
+        ])
+    candidates.extend([
+        r"C:\Windows\Fonts\msjh.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf",
+        "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.ttf",
+        r"C:\Windows\Fonts\segoeui.ttf",
+    ])
     for item in candidates:
         if Path(item).exists():
             return ImageFont.truetype(item, size=size)
