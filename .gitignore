@@ -1,6 +1,7 @@
 .edge-profile/
 prototype-shot.png
 __pycache__/
+.tat_runtime_outputs/
 *.py[cod]
 *.tmp
 *.log

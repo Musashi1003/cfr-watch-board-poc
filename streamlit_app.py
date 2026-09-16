@@ -12,7 +12,7 @@ import re
 from datetime import datetime
 from html import escape
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from urllib import error, request
 
 import altair as alt
@@ -20,6 +20,7 @@ import openpyxl
 import pandas as pd
 import streamlit as st
 
+import tat_dashboard
 from cfr_watch_analyzer import (
   FILTER_FIELDS,
   WorkbookUpload,
@@ -30,7 +31,7 @@ from cfr_watch_analyzer import (
 
 
 st.set_page_config(
-  page_title="CFR Watch Board",
+  page_title="IEC Quality Portal",
   layout="wide",
 )
 
@@ -111,7 +112,7 @@ def password_gate() -> bool:
   if st.session_state.get("authenticated"):
     return True
 
-  st.markdown("### CFR Watch Board Login")
+  st.markdown("### IEC Quality Portal Login")
   if expected_username:
     st.info(f"Account: `{expected_username}`. Please ask the dashboard owner for the password.")
   else:
@@ -128,6 +129,8 @@ def password_gate() -> bool:
     password_ok = hmac.compare_digest(password, expected_password)
     if username_ok and password_ok:
       st.session_state["authenticated"] = True
+      st.session_state["username"] = username.strip() if expected_username else "portal_user"
+      st.session_state.setdefault("portal_page", "home")
       st.rerun()
     st.error("Account or password is incorrect.")
 
@@ -355,6 +358,35 @@ def apply_page_style():
       }
       .change-log strong {
         color: #122426;
+      }
+      .portal-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+        margin: 1.25rem 0 1rem 0;
+      }
+      .portal-card {
+        background: #ffffff;
+        border: 1px solid #dce8ea;
+        border-radius: 10px;
+        padding: 1.25rem;
+        min-height: 150px;
+      }
+      .portal-card-title {
+        color: #122426;
+        font-size: 1.25rem;
+        font-weight: 760;
+        margin-bottom: 0.65rem;
+      }
+      .portal-card-body {
+        color: #557179;
+        font-size: 0.95rem;
+        line-height: 1.55;
+      }
+      @media (max-width: 900px) {
+        .portal-grid {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
     """,
@@ -1186,6 +1218,145 @@ def clean_filter_snapshot(filters: dict[str, list[str]]) -> dict[str, list[str]]
     key: [str(value).strip() for value in filters.get(key, []) if str(value).strip()]
     for key in FILTER_FIELDS
   }
+
+
+def set_portal_page(page: str) -> None:
+  st.session_state["portal_page"] = page
+  st.rerun()
+
+
+def render_portal_navigation() -> None:
+  with st.sidebar:
+    st.markdown("### IEC Quality Portal")
+    st.caption(f"Signed in as {st.session_state.get('username', 'portal_user')}")
+    st.divider()
+    if st.button("Home", key="nav_home", use_container_width=True):
+      set_portal_page("home")
+    if st.button("Customer Complaint - TAT", key="nav_tat", use_container_width=True):
+      set_portal_page("tat")
+    if st.button("Field Quality - CFR Watch Board", key="nav_cfr", use_container_width=True):
+      set_portal_page("cfr")
+    st.divider()
+    if st.button("Logout", key="nav_logout", use_container_width=True):
+      for key in ("authenticated", "username", "portal_page"):
+        st.session_state.pop(key, None)
+      st.rerun()
+
+
+def render_portal_home() -> None:
+  st.markdown('<div class="cfr-title">IEC Quality Portal</div>', unsafe_allow_html=True)
+  st.markdown(
+    '<div class="cfr-subtitle">Quality Data Monitoring & Customer Complaint Management</div>',
+    unsafe_allow_html=True,
+  )
+  st.markdown(
+    """
+    <div class="portal-grid">
+      <div class="portal-card">
+        <div class="portal-card-title">客訴管理 TAT</div>
+        <div class="portal-card-body">Customer complaint TAT monitoring, dashboard export, category, region, family, weekly, and YoY trend views.</div>
+      </div>
+      <div class="portal-card">
+        <div class="portal-card-title">CFR Watch Board</div>
+        <div class="portal-card-body">Field quality CFR monitoring, trend analysis, filters, Pareto, heatmap, ACT persistence, and group compare.</div>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+  )
+  left, right = st.columns(2)
+  with left:
+    if st.button("Enter TAT", key="home_enter_tat", type="primary", use_container_width=True):
+      set_portal_page("tat")
+  with right:
+    if st.button("Enter CFR Watch Board", key="home_enter_cfr", use_container_width=True):
+      set_portal_page("cfr")
+
+
+def render_tat_page() -> None:
+  st.markdown('<div class="cfr-title">客訴管理 TAT</div>', unsafe_allow_html=True)
+  st.markdown(
+    '<div class="cfr-subtitle">Upload ASUS customer complaint workbook and generate the same dashboard PNG/JSON used by the local TAT tool.</div>',
+    unsafe_allow_html=True,
+  )
+  st.info("目前採 Streamlit file upload，保留原本 TAT renderer 的 KPI、圖表、匯出 PNG/JSON 邏輯；不讀取本機 C: 或 D: 路徑。")
+
+  with st.form("tat_upload_form"):
+    uploaded_file = st.file_uploader(
+      "ASUS 客訴 Excel",
+      type=["xlsx", "xlsm"],
+      help="Upload the same workbook used by the local TAT tool.",
+    )
+    month_value = st.text_input(
+      "回饋月份",
+      value=tat_dashboard.default_feedback_month_value(),
+      help="Use YYYY-MM format, for example 2026-08.",
+    )
+    submitted = st.form_submit_button("Generate TAT Dashboard", type="primary")
+
+  if submitted:
+    if uploaded_file is None:
+      st.warning("Please upload an ASUS customer complaint workbook first.")
+      return
+    try:
+      selected_month = tat_dashboard.parse_feedback_month(month_value)
+      suffix = Path(uploaded_file.name).suffix or ".xlsx"
+      with NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+        temp_file.write(uploaded_file.getbuffer())
+        temp_path = Path(temp_file.name)
+      try:
+        runtime_root = Path(__file__).resolve().parent / ".tat_runtime_outputs"
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix="run_", dir=runtime_root, ignore_cleanup_errors=True) as output_dir:
+          if selected_month:
+            result = tat_dashboard.generate_dashboard(
+              temp_path,
+              Path(output_dir),
+              target_year=selected_month[0],
+              target_month=selected_month[1],
+            )
+          else:
+            result = tat_dashboard.generate_dashboard(temp_path, Path(output_dir))
+          image_bytes = result.image_path.read_bytes()
+          summary_text = result.json_path.read_text(encoding="utf-8")
+      finally:
+        temp_path.unlink(missing_ok=True)
+      st.session_state["tat_dashboard_result"] = {
+        "image": image_bytes,
+        "summary": summary_text,
+        "month_label": result.month_label,
+        "total_cases": result.total_cases,
+        "input_name": uploaded_file.name,
+      }
+    except Exception as exc:
+      st.error(f"TAT dashboard generation failed: {exc}")
+      return
+
+  result_payload = st.session_state.get("tat_dashboard_result")
+  if not result_payload:
+    return
+
+  st.success(
+    f"{result_payload['input_name']} | month: {result_payload['month_label']} | cases: {result_payload['total_cases']}"
+  )
+  st.image(result_payload["image"], caption="TAT dashboard preview", use_container_width=True)
+  col_png, col_json = st.columns(2)
+  with col_png:
+    st.download_button(
+      "Download PNG",
+      data=result_payload["image"],
+      file_name=f"TAT_Dashboard_{result_payload['month_label']}.png",
+      mime="image/png",
+      use_container_width=True,
+    )
+  with col_json:
+    st.download_button(
+      "Download JSON",
+      data=result_payload["summary"],
+      file_name=f"TAT_Dashboard_{result_payload['month_label']}_summary.json",
+      mime="application/json",
+      use_container_width=True,
+    )
 
 
 def filter_snapshot_summary(filters: dict[str, list[str]]) -> str:
@@ -2318,22 +2489,14 @@ def render_change_log():
   )
 
 
-def main():
-  reset_session_if_app_version_changed()
-  apply_page_style()
+def render_cfr_watch_board():
   st.markdown('<div class="cfr-title">CFR Watch Board</div>', unsafe_allow_html=True)
   st.markdown(
     '<div class="cfr-subtitle">Upload weekly Gaming NB and PC NB CFR workbooks, then filter by model, segment, ODM/OEM, module, and problem.</div>',
     unsafe_allow_html=True,
   )
 
-  if not password_gate():
-    return
-
   with st.sidebar:
-    if st.button("Sign out"):
-      st.session_state.pop("authenticated", None)
-      st.rerun()
     render_act_persistence_preflight()
 
   uploaded_files = st.file_uploader(
@@ -2425,6 +2588,25 @@ def main():
 
   st.divider()
   render_change_log()
+
+
+def main():
+  reset_session_if_app_version_changed()
+  apply_page_style()
+
+  if not password_gate():
+    return
+
+  st.session_state.setdefault("portal_page", "home")
+  render_portal_navigation()
+  current_page = st.session_state.get("portal_page", "home")
+
+  if current_page == "tat":
+    render_tat_page()
+  elif current_page == "cfr":
+    render_cfr_watch_board()
+  else:
+    render_portal_home()
 
 
 if __name__ == "__main__":
