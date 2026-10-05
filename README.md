@@ -133,9 +133,41 @@ ACT_HISTORY_GITHUB_BRANCH = "main"
 
 If `ACT_HISTORY_GITHUB_TOKEN` is not configured, uploaded ACT values are still available in the current session and the app will offer an updated `activation_history.csv` download, but Streamlit restarts will not preserve those new rows automatically.
 
-### ACT table maintenance
+### PostgreSQL ACT persistence
 
-`ACT table.xlsx` is the preferred ACT database when it is available. The app reads this workbook before falling back to `data/activation_history.csv`, so manually maintained ACT values remain the source of truth.
+PostgreSQL is the production ACT store. The integration is backend-neutral and works with a company-managed PostgreSQL service or an approved managed PostgreSQL provider.
+
+1. Create an empty PostgreSQL database and require TLS for remote connections.
+2. Run `sql/001_create_cfr_act_tables.sql` in that database.
+3. Set `ACT_DATABASE_URL` in the local environment and run the one-time workbook import:
+
+```powershell
+$env:ACT_DATABASE_URL = "postgresql://user:password@host:5432/database?sslmode=require"
+py scripts/import_act_table_to_postgres.py "ACT table.xlsx"
+```
+
+4. Verify that the import reports `verified` rows and a batch id.
+5. Add the following to Streamlit Cloud Secrets. Do not commit the real URL or password:
+
+```toml
+ACT_STORAGE_BACKEND = "postgresql"
+ACT_DATABASE_URL = "postgresql://user:password@host:5432/database?sslmode=require"
+```
+
+When PostgreSQL mode is enabled:
+
+- Every new week is written in one database transaction.
+- Models missing from the uploaded weekly summary carry forward their prior ACT quantity.
+- A missing intermediate week or a conflicting stored value rejects and rolls back the transaction.
+- The app reads the complete saved snapshot back from PostgreSQL and compares it before showing a green persistence result.
+- A database failure stops the uploaded dashboard from using uncommitted ACT values.
+- `ACT table.xlsx` remains a migration source and backup export, not the production database.
+
+Keep `ACT_STORAGE_BACKEND` unset or set to `github` until the schema and initial import have succeeded. This prevents the live app from switching to an empty database.
+
+### Legacy ACT table maintenance
+
+When PostgreSQL mode is not enabled, `ACT table.xlsx` remains the legacy ACT source. The app reads this workbook before falling back to `data/activation_history.csv`.
 
 - `2025 ACT` uses `MODEL_GROUP` as the model key.
 - `2026 ACT` uses `ORG_MODEL(PRODUCT_DESC)` as the model key.

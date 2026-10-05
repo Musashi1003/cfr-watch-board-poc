@@ -223,6 +223,7 @@ def parse_workbooks(workbooks: Iterable[WorkbookUpload]) -> dict:
   file_summaries: list[dict] = []
   missing_columns_by_file: dict[str, list[str]] = {}
   summary_by_model: dict[str, dict] = {}
+  summary_by_file: dict[str, dict[str, dict]] = {}
 
   required_columns = {
     "RMA_NO",
@@ -235,7 +236,9 @@ def parse_workbooks(workbooks: Iterable[WorkbookUpload]) -> dict:
   for upload in workbooks:
     workbook = openpyxl.load_workbook(upload.path, read_only=True, data_only=True)
     try:
-      for model, summary in _parse_summary_iec(workbook, upload.filename).items():
+      file_summary_by_model = _parse_summary_iec(workbook, upload.filename)
+      summary_by_file[upload.filename] = file_summary_by_model
+      for model, summary in file_summary_by_model.items():
         existing = summary_by_model.get(model)
         if existing and existing.get("derived_act") and summary.get("derived_act"):
           existing["derived_act"] += summary["derived_act"]
@@ -338,6 +341,7 @@ def parse_workbooks(workbooks: Iterable[WorkbookUpload]) -> dict:
     "files": file_summaries,
     "missing_columns": missing_columns_by_file,
     "summary_by_model": summary_by_model,
+    "summary_by_file": summary_by_file,
   }
 
 

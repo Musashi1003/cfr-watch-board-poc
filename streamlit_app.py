@@ -21,6 +21,12 @@ import pandas as pd
 import streamlit as st
 
 import tat_dashboard
+from act_postgres import (
+  ActDatabaseError,
+  check_database,
+  load_act_store,
+  persist_act_updates,
+)
 from cfr_watch_analyzer import (
   FILTER_FIELDS,
   WorkbookUpload,
@@ -77,7 +83,7 @@ ACT_TABLE_PATH = Path(__file__).resolve().parent / "ACT table.xlsx"
 ACT_TABLE_GITHUB_PATH = "ACT table.xlsx"
 DEFAULT_GITHUB_REPO = "Musashi1003/cfr-watch-board-poc"
 DEFAULT_GITHUB_BRANCH = "main"
-APP_SESSION_VERSION = "2026-08-21-act-cache-signature"
+APP_SESSION_VERSION = "2026-10-05-postgresql-act-persistence"
 
 
 def week_sort_key(week: str) -> tuple[int, int, str]:
@@ -99,6 +105,28 @@ def read_secret(name: str) -> str:
     return str(st.secrets.get(name, "") or "")
   except Exception:
     return ""
+
+
+def act_storage_backend() -> str:
+  return (read_secret("ACT_STORAGE_BACKEND") or "github").strip().lower()
+
+
+def act_postgres_enabled() -> bool:
+  return act_storage_backend() == "postgresql"
+
+
+def act_database_url() -> str:
+  return read_secret("ACT_DATABASE_URL").strip()
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def act_database_health_cached() -> tuple[bool, str]:
+  return check_database(act_database_url())
+
+
+@st.cache_data(show_spinner=False, ttl=30)
+def act_database_store_cached() -> dict[tuple[str, str, str, str], float]:
+  return load_act_store(act_database_url())
 
 
 def password_gate() -> bool:
@@ -745,35 +773,67 @@ def activation_history_store_cached(cache_signature: tuple) -> dict[tuple[str, s
 
 
 def activation_history_store() -> dict[tuple[str, str, str, str], float]:
+  if act_postgres_enabled():
+    if not act_database_url():
+      return {}
+    try:
+      return dict(act_database_store_cached())
+    except ActDatabaseError as exc:
+      st.session_state["act_database_read_error"] = str(exc)
+      return {}
   return activation_history_store_cached(act_store_cache_signature())
 
 
 def activation_updates_from_parsed(parsed: dict) -> list[dict]:
   records = parsed.get("records", [])
-  week = latest_week_from_records(records)
-  if not week:
+  if not records:
     return []
 
   summary_by_model = parsed.get("summary_by_model", {})
-  scope_by_act_model: dict[tuple[str, str, str], set[str]] = {}
+  summary_by_file = parsed.get("summary_by_file", {})
+  weeks_by_file: dict[str, set[str]] = {}
   for record in records:
+    source_file = str(record.get("source_file", "")).strip()
+    week = str(record.get("Week", "")).strip()
+    if source_file and week:
+      weeks_by_file.setdefault(source_file, set()).add(week)
+  latest_week_by_file = {
+    source_file: sorted(weeks, key=week_sort_key)[-1]
+    for source_file, weeks in weeks_by_file.items()
+    if weeks
+  }
+
+  scope_by_week_act_model: dict[tuple[str, str, str, str], set[tuple[str, str]]] = {}
+  for record in records:
+    week = str(record.get("Week", "")).strip()
     source_type = normalize_source_type(record.get("source_type", ""))
     launch_year = launch_year_from_record(record)
     act_model = act_model_from_record(record)
     raw_model = str(record.get("ORG_MODEL(PRODUCT_DESC)", "")).strip()
-    if not source_type or not launch_year or not act_model or not raw_model:
+    source_file = str(record.get("source_file", "")).strip()
+    if not week or not source_type or not launch_year or not act_model or not raw_model or not source_file:
       continue
-    scope_by_act_model.setdefault((source_type, launch_year, act_model), set()).add(raw_model)
+    if latest_week_by_file.get(source_file) != week:
+      continue
+    scope_by_week_act_model.setdefault(
+      (week, source_type, launch_year, act_model),
+      set(),
+    ).add((raw_model, source_file))
 
   updates = []
-  for (source_type, launch_year, act_model), raw_models in sorted(scope_by_act_model.items()):
+  sorted_scope_items = sorted(
+    scope_by_week_act_model.items(),
+    key=lambda item: (week_sort_key(item[0][0]), item[0][1:]),
+  )
+  for (week, source_type, launch_year, act_model), raw_models in sorted_scope_items:
     activation = 0.0
     matched_models = 0
-    for raw_model in raw_models:
-      summary_key = summary_key_for_model(raw_model, summary_by_model)
+    for raw_model, source_file in raw_models:
+      file_summary = summary_by_file.get(source_file) or summary_by_model
+      summary_key = summary_key_for_model(raw_model, file_summary)
       if not summary_key:
         continue
-      derived_act = summary_by_model[summary_key].get("derived_act")
+      derived_act = file_summary[summary_key].get("derived_act")
       if derived_act is None:
         continue
       activation += float(derived_act)
@@ -790,6 +850,7 @@ def activation_updates_from_parsed(parsed: dict) -> list[dict]:
         "week": week,
         "cumulative_activation": activation,
         "source": "upload",
+        "source_files": sorted({source_file for _, source_file in raw_models}),
       }
     )
   return updates
@@ -1135,6 +1196,12 @@ def update_act_table_workbook(updates: list[dict]) -> dict:
 
 
 def remember_activation_snapshot(parsed: dict) -> dict:
+  if act_postgres_enabled():
+    return {
+      "status": "skipped",
+      "message": "PostgreSQL is the authoritative ACT store; the legacy CSV was not written.",
+    }
+
   updates = activation_updates_from_parsed(parsed)
   if not updates:
     return {"status": "skipped", "message": "No ACT values were found to record."}
@@ -1160,8 +1227,47 @@ def remember_activation_snapshot(parsed: dict) -> dict:
   }
 
 
-def remember_act_table_snapshot(parsed: dict) -> dict:
-  return update_act_table_workbook(activation_updates_from_parsed(parsed))
+def remember_act_table_snapshot(
+  parsed: dict,
+  upload_payloads: tuple[tuple[str, bytes], ...] = (),
+) -> dict:
+  updates = activation_updates_from_parsed(parsed)
+  if not act_postgres_enabled():
+    return update_act_table_workbook(updates)
+
+  if not act_database_url():
+    return {
+      "status": "database_error",
+      "message": "ACT_DATABASE_URL is not configured. No ACT values were saved.",
+      "backend": "postgresql",
+      "generated_count": len(updates),
+      "week_label": act_update_week_label(updates),
+      "persistence_ok": False,
+      "requires_manual_save": True,
+    }
+
+  try:
+    result = persist_act_updates(
+      act_database_url(),
+      updates,
+      upload_payloads,
+      actor=st.session_state.get("username", "IEC-CFR"),
+    )
+  except ActDatabaseError as exc:
+    return {
+      "status": "database_error",
+      "message": str(exc),
+      "backend": "postgresql",
+      "generated_count": len(updates),
+      "week_label": act_update_week_label(updates),
+      "persistence_ok": False,
+      "requires_manual_save": True,
+    }
+
+  act_database_store_cached.clear()
+  act_database_health_cached.clear()
+  st.session_state.pop("act_database_read_error", None)
+  return result
 
 
 def selected_filters(records: list[dict]) -> dict[str, list[str]]:
@@ -1431,13 +1537,22 @@ def render_activation_history_status(result: dict):
 
 def render_act_table_status(result: dict):
   status = result.get("status")
+  backend = result.get("backend", "github")
   message = result.get("message", "")
   added_count = result.get("added_count", 0)
   kept_count = result.get("kept_count", 0)
   generated_count = result.get("generated_count", 0)
+  verified_count = result.get("verified_count", 0)
   week_label = result.get("week_label", "N/A")
 
   if status == "saved":
+    if backend == "postgresql":
+      st.success(
+        f"ACT Persistence Guard passed: {week_label} committed to PostgreSQL and "
+        f"read-back verified ({generated_count} uploaded updates, "
+        f"{kept_count} carried forward, {verified_count} stored rows). {message}"
+      )
+      return
     st.success(
       f"ACT Persistence Guard passed: {week_label} saved to ACT table "
       f"({added_count} new values, {kept_count} kept). {message}"
@@ -1446,11 +1561,24 @@ def render_act_table_status(result: dict):
   if status == "unchanged":
     st.success(
       message
-      or f"ACT Persistence Guard passed: {week_label} already exists in ACT table."
+      or (
+        f"ACT Persistence Guard passed: {week_label} already exists in "
+        f"{'PostgreSQL' if backend == 'postgresql' else 'ACT table'}."
+      )
     )
     return
   if status == "skipped":
     st.info(message or "No ACT values were found for ACT table update.")
+    return
+  if status == "database_error":
+    st.error(
+      f"ACT Persistence Guard failed: {week_label} was not committed to PostgreSQL. "
+      f"The transaction was rolled back and these values will not be used. {message}"
+    )
+    st.warning(
+      "Fix the PostgreSQL connection, schema, permissions, conflict, or missing prior week, "
+      "then upload the same source workbooks again."
+    )
     return
   if status == "download":
     st.error(
@@ -1470,6 +1598,20 @@ def render_act_table_status(result: dict):
 
 
 def render_act_persistence_preflight():
+  if act_postgres_enabled():
+    if not act_database_url():
+      st.sidebar.error(
+        "ACT persistence: PostgreSQL is selected, but ACT_DATABASE_URL is not configured. "
+        "Weekly ACT uploads are blocked from becoming official."
+      )
+      return
+    healthy, message = act_database_health_cached()
+    if healthy:
+      st.sidebar.success("ACT persistence: PostgreSQL connected and schema ready.")
+    else:
+      st.sidebar.error(f"ACT persistence: {message}")
+    return
+
   if act_github_write_enabled():
     st.sidebar.success("ACT persistence: GitHub write enabled.")
     return
@@ -2471,6 +2613,7 @@ def render_change_log():
     ("2026-08-21", "Added Launch Year as a selectable filter in Overview Dashboard and Group CFR Compare so groups can be built separately for 2025 ACT and 2026 ACT scopes."),
     ("2026-08-21", "Stopped year-specific CFR lines at each group's own latest uploaded week and aligned cross-year Group CFR Compare charts by relative week WK01, WK02, and onward."),
     ("2026-08-21", "Changed cross-year Group CFR Compare x-axis to launch-year week indexing, so W2633 is shown as WK33 instead of the 28th plotted data point."),
+    ("2026-10-05", "Added optional PostgreSQL ACT persistence with atomic weekly snapshots, carry-forward values, continuity and conflict checks, and read-back verification before dashboard use."),
   ]
   items = "\n".join(
     f"<li><strong>{html_escape(date)}</strong> {html_escape(message)}</li>"
@@ -2539,11 +2682,26 @@ def render_cfr_watch_board():
     render_parse_diagnostics(parsed)
     return
 
-  activation_history_result = remember_activation_snapshot(parsed)
-  act_table_result = remember_act_table_snapshot(parsed)
+  act_table_result = remember_act_table_snapshot(parsed, upload_payloads)
+  activation_history_result = (
+    remember_activation_snapshot(parsed)
+    if act_table_result.get("persistence_ok", False)
+    else {
+      "status": "skipped",
+      "message": "Legacy ACT history was not updated because primary persistence failed.",
+    }
+  )
   render_file_summary(parsed)
   render_act_table_status(act_table_result)
   render_activation_history_status(activation_history_result)
+
+  if act_postgres_enabled() and not act_table_result.get("persistence_ok", False):
+    st.error(
+      "Dashboard calculation stopped because the uploaded ACT snapshot was not verified in PostgreSQL."
+    )
+    st.divider()
+    render_change_log()
+    return
 
   view_mode = render_mode_selector()
 
