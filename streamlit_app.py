@@ -1075,7 +1075,19 @@ def ensure_week_column(worksheet, week: str) -> int:
   if week_key in headers:
     return headers[week_key]
 
-  new_column = worksheet.max_column + 1
+  header_row = next(
+    worksheet.iter_rows(min_row=1, max_row=1, values_only=True),
+    (),
+  )
+  last_labeled_column = max(
+    (
+      index
+      for index, value in enumerate(header_row, start=1)
+      if str(value or "").strip()
+    ),
+    default=0,
+  )
+  new_column = last_labeled_column + 1
   worksheet.cell(row=1, column=new_column).value = week
   if new_column > 1:
     source_cell = worksheet.cell(row=1, column=new_column - 1)
@@ -1085,6 +1097,40 @@ def ensure_week_column(worksheet, week: str) -> int:
     target_cell.number_format = source_cell.number_format
     target_cell.alignment = copy(source_cell.alignment)
   return new_column
+
+
+def previous_week_column(worksheet, week: str) -> int | None:
+  target_key = week_sort_key(week)
+  candidates = []
+  for normalized_header, column in worksheet_header_map(worksheet).items():
+    if not re.fullmatch(r"W\d{4}", normalized_header):
+      continue
+    if week_sort_key(normalized_header) < target_key:
+      candidates.append((week_sort_key(normalized_header), column))
+  if not candidates:
+    return None
+  return max(candidates, key=lambda item: item[0])[1]
+
+
+def carry_forward_act_values(worksheet, week: str, week_column: int) -> set[int]:
+  previous_column = previous_week_column(worksheet, week)
+  if previous_column is None:
+    return set()
+
+  carried_rows = set()
+  for row_index in range(2, worksheet.max_row + 1):
+    target_cell = worksheet.cell(row=row_index, column=week_column)
+    if numeric_activation(target_cell.value) is not None:
+      continue
+    previous_value = numeric_activation(
+      worksheet.cell(row=row_index, column=previous_column).value
+    )
+    if previous_value is None:
+      continue
+    target_cell.value = int(round(previous_value))
+    target_cell.number_format = "#,##0"
+    carried_rows.add(row_index)
+  return carried_rows
 
 
 def act_table_row_key(worksheet, row_index: int, source_column: int, model_column: int) -> tuple[str, str]:
@@ -1132,11 +1178,21 @@ def update_act_table_workbook(updates: list[dict]) -> dict:
 
   added_count = 0
   kept_count = 0
+  carried_forward_count = 0
   try:
-    for update in updates:
-      launch_year = str(update.get("launch_year", "")).strip()
-      if not launch_year:
-        continue
+    worksheet_state = {}
+    for launch_year, week in sorted(
+      {
+        (
+          str(update.get("launch_year", "")).strip(),
+          str(update.get("week", "")).strip(),
+        )
+        for update in updates
+        if str(update.get("launch_year", "")).strip()
+        and str(update.get("week", "")).strip()
+      },
+      key=lambda item: (item[0], week_sort_key(item[1])),
+    ):
       worksheet = ensure_act_sheet(workbook, launch_year)
       headers = worksheet_header_map(worksheet)
       source_column = headers.get("GAMINGPC") or 2
@@ -1146,28 +1202,60 @@ def update_act_table_workbook(updates: list[dict]) -> dict:
         or headers.get("MODEL")
         or 3
       )
-      week_column = ensure_week_column(worksheet, update["week"])
+      week_column = ensure_week_column(worksheet, week)
+      originally_populated_rows = {
+        row_index
+        for row_index in range(2, worksheet.max_row + 1)
+        if numeric_activation(worksheet.cell(row=row_index, column=week_column).value)
+        is not None
+      }
+      carried_rows = carry_forward_act_values(worksheet, week, week_column)
+      worksheet_state[(launch_year, week)] = {
+        "worksheet": worksheet,
+        "source_column": source_column,
+        "model_column": model_column,
+        "week_column": week_column,
+        "originally_populated_rows": originally_populated_rows,
+        "carried_rows": carried_rows,
+      }
+
+    for update in updates:
+      launch_year = str(update.get("launch_year", "")).strip()
+      week = str(update.get("week", "")).strip()
+      if not launch_year or not week:
+        continue
+      state = worksheet_state[(launch_year, week)]
+      worksheet = state["worksheet"]
+      source_column = state["source_column"]
+      model_column = state["model_column"]
+      week_column = state["week_column"]
       row_index = find_or_create_act_row(worksheet, update, source_column, model_column)
       target_cell = worksheet.cell(row=row_index, column=week_column)
-      existing_value = numeric_activation(target_cell.value)
-      if existing_value is not None:
+      if row_index in state["originally_populated_rows"]:
         kept_count += 1
         continue
       target_cell.value = int(round(update["cumulative_activation"]))
       target_cell.number_format = "#,##0"
+      state["carried_rows"].discard(row_index)
       added_count += 1
+
+    carried_forward_count = sum(
+      len(state["carried_rows"])
+      for state in worksheet_state.values()
+    )
 
     output = BytesIO()
     workbook.save(output)
   finally:
     workbook.close()
 
-  if added_count == 0:
+  if added_count == 0 and carried_forward_count == 0:
     return {
       "status": "unchanged",
       "message": f"ACT table already has the latest uploaded week values. Kept {kept_count} existing values.",
       "added_count": added_count,
       "kept_count": kept_count,
+      "carried_forward_count": carried_forward_count,
       "generated_count": len(updates),
       "week_label": act_update_week_label(updates),
       "github_write_enabled": act_github_write_enabled(),
@@ -1179,13 +1267,14 @@ def update_act_table_workbook(updates: list[dict]) -> dict:
   saved, message = write_bytes_to_github(
     read_secret("ACT_TABLE_GITHUB_PATH") or ACT_TABLE_GITHUB_PATH,
     xlsx_bytes,
-    f"Update ACT table ({added_count} values)",
+    f"Update ACT table ({added_count} updates, {carried_forward_count} carry-forward)",
   )
   return {
     "status": "saved" if saved else "download",
     "message": message,
     "added_count": added_count,
     "kept_count": kept_count,
+    "carried_forward_count": carried_forward_count,
     "generated_count": len(updates),
     "week_label": act_update_week_label(updates),
     "github_write_enabled": act_github_write_enabled(),
@@ -1541,6 +1630,7 @@ def render_act_table_status(result: dict):
   message = result.get("message", "")
   added_count = result.get("added_count", 0)
   kept_count = result.get("kept_count", 0)
+  carried_forward_count = result.get("carried_forward_count", 0)
   generated_count = result.get("generated_count", 0)
   verified_count = result.get("verified_count", 0)
   week_label = result.get("week_label", "N/A")
@@ -1555,7 +1645,8 @@ def render_act_table_status(result: dict):
       return
     st.success(
       f"ACT Persistence Guard passed: {week_label} saved to ACT table "
-      f"({added_count} new values, {kept_count} kept). {message}"
+      f"({added_count} uploaded values, {carried_forward_count} carried forward, "
+      f"{kept_count} already kept). {message}"
     )
     return
   if status == "unchanged":
@@ -1583,7 +1674,8 @@ def render_act_table_status(result: dict):
   if status == "download":
     st.error(
       f"ACT Persistence Guard failed: {week_label} generated {added_count} new ACT values "
-      f"from {generated_count} model updates, but they were not permanently saved. {message}"
+      f"and {carried_forward_count} carry-forward values from {generated_count} model updates, "
+      f"but they were not permanently saved. {message}"
     )
     st.warning(
       "Download the updated ACT table below and replace `ACT table.xlsx`, or ask the app owner to set "
@@ -2614,6 +2706,7 @@ def render_change_log():
     ("2026-08-21", "Stopped year-specific CFR lines at each group's own latest uploaded week and aligned cross-year Group CFR Compare charts by relative week WK01, WK02, and onward."),
     ("2026-08-21", "Changed cross-year Group CFR Compare x-axis to launch-year week indexing, so W2633 is shown as WK33 instead of the 28th plotted data point."),
     ("2026-10-05", "Added optional PostgreSQL ACT persistence with atomic weekly snapshots, carry-forward values, continuity and conflict checks, and read-back verification before dashboard use."),
+    ("2026-10-09", "Fixed new ACT weeks being placed after preformatted blank columns, added prior-week carry-forward for models absent from the current upload, and stopped charts from silently falling back to an older ACT week when persistence fails."),
   ]
   items = "\n".join(
     f"<li><strong>{html_escape(date)}</strong> {html_escape(message)}</li>"
@@ -2695,9 +2788,11 @@ def render_cfr_watch_board():
   render_act_table_status(act_table_result)
   render_activation_history_status(activation_history_result)
 
-  if act_postgres_enabled() and not act_table_result.get("persistence_ok", False):
+  if not act_table_result.get("persistence_ok", False):
+    backend_name = "PostgreSQL" if act_postgres_enabled() else "the authoritative ACT table"
     st.error(
-      "Dashboard calculation stopped because the uploaded ACT snapshot was not verified in PostgreSQL."
+      "Dashboard calculation stopped because the uploaded ACT snapshot was not verified in "
+      f"{backend_name}. This prevents the chart from silently falling back to an older week."
     )
     st.divider()
     render_change_log()
