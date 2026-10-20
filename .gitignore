@@ -2,6 +2,7 @@
 prototype-shot.png
 __pycache__/
 .tat_runtime_outputs/
+.act_sync/
 *.py[cod]
 *.tmp
 *.log
