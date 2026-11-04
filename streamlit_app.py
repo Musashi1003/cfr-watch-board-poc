@@ -1197,7 +1197,13 @@ def render_tat_page() -> None:
   st.success(
     f"{result_payload['input_name']} | month: {result_payload['month_label']} | cases: {result_payload['total_cases']}"
   )
-  st.image(result_payload["image"], caption="TAT dashboard preview", use_container_width=True)
+  # Embed the preview so it does not depend on a separate Streamlit media request.
+  preview_base64 = base64.b64encode(result_payload["image"]).decode("ascii")
+  st.markdown(
+    '<img src="data:image/png;base64,' + preview_base64
+    + '" alt="TAT dashboard preview" style="display:block;width:100%;height:auto;">',
+    unsafe_allow_html=True,
+  )
   col_png, col_json = st.columns(2)
   with col_png:
     st.download_button(
