@@ -1912,13 +1912,7 @@ def group_launch_year(records: list[dict], filters: dict[str, list[str]]) -> str
 
 
 def should_use_relative_week_axis(records: list[dict], groups: list[dict]) -> bool:
-  group_years = [
-    group_launch_year(records, group.get("filters", {}))
-    for group in groups
-  ]
-  if any(year is None for year in group_years):
-    return False
-  return len(set(group_years)) > 1
+  return len(groups) > 1
 
 
 def launch_year_week_index(week: str, launch_year: str | None) -> int | None:
@@ -1931,14 +1925,12 @@ def launch_year_week_index(week: str, launch_year: str | None) -> int | None:
   return ((week_year - launch_year_number) * 52) + week_number
 
 
-def add_relative_week_axis(trend: pd.DataFrame, launch_year: str | None = None) -> pd.DataFrame:
+def add_relative_week_axis(trend: pd.DataFrame) -> pd.DataFrame:
   trend = trend.sort_values("end_week", key=lambda series: series.map(week_sort_key)).reset_index(drop=True)
-  if launch_year:
-    trend["relative_week_index"] = trend["end_week"].map(
-      lambda week: launch_year_week_index(week, launch_year)
-    )
-  else:
-    trend["relative_week_index"] = range(1, len(trend) + 1)
+  week_dates = trend["end_week"].map(
+    lambda week: datetime.fromisocalendar(2000 + int(week[1:3]), int(week[3:]), 1)
+  )
+  trend["relative_week_index"] = ((week_dates - week_dates.iloc[0]).dt.days // 7) + 1
   trend["relative_week_label"] = trend["relative_week_index"].map(
     lambda value: f"WK{int(value):02d}" if value is not None and not pd.isna(value) else ""
   )
@@ -2048,19 +2040,19 @@ def render_group_compare(records: list[dict]):
   if not groups:
     return
 
-  use_relative_week_axis = should_use_relative_week_axis(records, groups)
   trend_frames = []
+  plotted_groups = []
   skipped = []
   for index, group in enumerate(groups):
     trend, message = cumulative_cfr_trend_data(records, group.get("filters", {}))
     if trend.empty:
       skipped.append(f"{group['label']}: {message}")
       continue
-    axis_launch_year = group_launch_year(records, group.get("filters", {})) if use_relative_week_axis else None
-    trend = add_relative_week_axis(trend.copy(), axis_launch_year)
+    trend = add_relative_week_axis(trend.copy())
     trend["group"] = group["label"]
     trend["group_order"] = index
     trend_frames.append(trend)
+    plotted_groups.append(group)
 
   if not trend_frames:
     st.info("No cumulative CFR can be calculated for the added groups.")
@@ -2068,7 +2060,10 @@ def render_group_compare(records: list[dict]):
       st.caption(message)
     return
 
+  use_relative_week_axis = should_use_relative_week_axis(records, plotted_groups)
   trend_all = pd.concat(trend_frames, ignore_index=True)
+  if use_relative_week_axis:
+    st.caption("Comparison Week: each group's first available data week is WK01. Original weeks are retained in tooltips and the summary below.")
   latest_rows = group_latest_rows(trend_all)
   render_group_insight_cards(latest_rows)
 
@@ -2089,7 +2084,7 @@ def render_group_compare(records: list[dict]):
   )
   if use_relative_week_axis:
     x_field = "relative_week_label:N"
-    x_title = "Launch Year Week"
+    x_title = "Comparison Week"
     x_sort = sorted(trend_all["relative_week_label"].dropna().unique(), key=relative_week_label_sort_key)
   else:
     x_field = "end_week:N"
@@ -2100,7 +2095,6 @@ def render_group_compare(records: list[dict]):
     y_axis = alt.Axis(title=None, format=",.0f")
     tooltips = [
       alt.Tooltip("group:N", title="Group"),
-      alt.Tooltip("relative_week_label:N", title="Launch Year Week"),
       alt.Tooltip("end_week:N", title="Week"),
       alt.Tooltip("weekly_failure:Q", title="Weekly Failures", format=",.0f"),
       alt.Tooltip("cumulative_failure:Q", title="TTL Failures", format=",.0f"),
@@ -2110,12 +2104,14 @@ def render_group_compare(records: list[dict]):
     y_axis = alt.Axis(title=None, format=".2%")
     tooltips = [
       alt.Tooltip("group:N", title="Group"),
-      alt.Tooltip("relative_week_label:N", title="Launch Year Week"),
       alt.Tooltip("end_week:N", title="Week"),
       alt.Tooltip("cumulative_cfr:Q", title="Cumulative CFR", format=".2%"),
       alt.Tooltip("cumulative_failure:Q", title="TTL Failures", format=",.0f"),
       alt.Tooltip("cumulative_activation:Q", title="Cumulative ACT", format=",.0f"),
     ]
+
+  if use_relative_week_axis:
+    tooltips.insert(1, alt.Tooltip("relative_week_label:N", title="Comparison Week"))
 
   chart = (
     alt.Chart(trend_all)
@@ -2376,6 +2372,7 @@ def render_change_log():
     ("2026-08-21", "Changed cross-year Group CFR Compare x-axis to launch-year week indexing, so W2633 is shown as WK33 instead of the 28th plotted data point."),
     ("2026-10-05", "Added optional PostgreSQL ACT persistence with atomic weekly snapshots, carry-forward values, continuity and conflict checks, and read-back verification before dashboard use."),
     ("2026-10-09", "Fixed new ACT weeks being placed after preformatted blank columns, added prior-week carry-forward for models absent from the current upload, and stopped charts from silently falling back to an older ACT week when persistence fails."),
+    ("2026-11-05", "Group CFR Compare now aligns two or more plotted groups at WK01 from each group's first available data week; a single plotted group retains natural weeks. Original weeks remain in tooltips and summaries."),
   ]
   items = "\n".join(
     f"<li><strong>{html_escape(date)}</strong> {html_escape(message)}</li>"
